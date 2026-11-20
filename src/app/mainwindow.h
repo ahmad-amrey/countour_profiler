@@ -61,6 +61,8 @@ private:
     // Pipeline
     void openImage();
     void openSample();
+    void closeDocument();
+    void printSheet();
     void changeSquareSize();
     void runAutomatic();
     bool detectGrid();
@@ -113,7 +115,7 @@ private:
     // Shell
     QStackedWidget* pages_ = nullptr;
     StartPage* start_ = nullptr;
-    QLabel* fileChip_ = nullptr;
+    QPushButton* fileChip_ = nullptr;
     QPushButton* helpBtn_ = nullptr;
     QPushButton* openBtn_ = nullptr;
     QPushButton* exportBtn_ = nullptr;

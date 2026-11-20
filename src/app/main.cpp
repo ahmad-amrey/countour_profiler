@@ -5,6 +5,7 @@
 
 #include "mainwindow.h"
 #include "theme.h"
+#include "widgets.h"
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
@@ -41,6 +42,16 @@ int main(int argc, char** argv) {
         QTimer::singleShot(300, &w, [&w, file, orig, tier] {
             if (tier == "details") w.showDetails(true);
             if (tier == "arcs") w.showArcs();
+            if (tier == "print") {
+                auto* dlg = new PrintSheetDialog(&w, 10);
+                dlg->setAttribute(Qt::WA_DontShowOnScreen, true);
+                dlg->show();
+                QTimer::singleShot(250, &w, [dlg, file] {
+                    dlg->grab().save(file);
+                    QApplication::quit();
+                });
+                return;
+            }
             w.showView(orig);
             QTimer::singleShot(250, &w, [&w, file] {
                 w.grab().save(file);

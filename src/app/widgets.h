@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <vector>
 
+#include "calsheet.h"
 #include "fit.h"
 #include "theme.h"
 
@@ -58,6 +59,7 @@ signals:
     void sampleRequested();
     void squareChangeRequested();
     void helpRequested();
+    void printSheetRequested();
 private:
     QLabel* squareValue_;
     QFrame* drop_;
@@ -114,4 +116,20 @@ private:
     QComboBox* origin_;
     QCheckBox* grid_;
     QPushButton* save_;
+};
+
+// Printable calibration sheet: pattern, background, square size, paper.
+class PrintSheetDialog : public QDialog {
+    Q_OBJECT
+public:
+    PrintSheetDialog(QWidget* parent, double squareMM);
+    SheetOptions options() const;
+private:
+    void refresh();
+    Segmented* pattern_;
+    Segmented* background_;
+    QDoubleSpinBox* square_;
+    QComboBox* paper_;
+    QLabel* preview_;
+    QLabel* tip_;
 };

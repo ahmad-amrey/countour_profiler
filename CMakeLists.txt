@@ -42,6 +42,8 @@ if(CP_BUILD_GUI)
     src/app/canvas.cpp
     src/app/canvas.h
     src/app/document.h
+    src/app/calsheet.cpp
+    src/app/calsheet.h
     src/app/theme.cpp
     src/app/theme.h
     src/app/widgets.cpp
@@ -59,7 +61,8 @@ endif()
 # Self-test: synthetic ground-truth checks + batch runner for real photos.
 # ---------------------------------------------------------------------------
 if(CP_BUILD_TESTS)
-  add_executable(cp_selftest tests/selftest.cpp)
+  add_executable(cp_selftest tests/selftest.cpp src/app/calsheet.cpp)
+  target_include_directories(cp_selftest PRIVATE src/app)
   target_link_libraries(cp_selftest PRIVATE cpcore Qt6::Gui)
 endif()
 
@@ -69,6 +72,7 @@ endif()
 if(CP_BUILD_TESTS)
   enable_testing()
   add_test(NAME line_arc_fitting COMMAND cp_selftest fit)
+  add_test(NAME printed_calibration_sheets COMMAND cp_selftest sheet ${CMAKE_BINARY_DIR}/test-output/sheets)
   add_test(NAME synthetic_ground_truth
            COMMAND cp_selftest synth ${CMAKE_BINARY_DIR}/test-output/synth)
   file(GLOB CP_REFERENCE_PHOTOS ${CMAKE_SOURCE_DIR}/tests/data/*.jpg)

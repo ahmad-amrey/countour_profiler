@@ -36,7 +36,7 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
   (polyline bulges) and SVG arc commands.
 - **Editing**: drag points, double-click to insert, right-click to delete, draw
   by hand, and undo/redo.
-- **Rectified top view** with a scale bar. It can be saved as a PNG with the
+- **Corrected view** (perspective removed, true scale) with a scale bar. It can be saved as a PNG with the
   true scale embedded.
 - **Export**:
   - DXF R12 in mm with Y up. It opens in AutoCAD, LibreCAD, FreeCAD, Fusion 360,
@@ -47,6 +47,22 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
 
 > **DWG:** DWG is a closed Autodesk format. Open the DXF in your CAD program and
 > *Save As* DWG, or batch-convert with the free ODA File Converter.
+
+## No cutting mat? Print a sheet
+
+On the start screen, choose *Print a calibration sheet* (also in the ⋯ menu).
+It generates a PDF (A4, US Letter or A3) with exact squares that the detector
+reads automatically. There are three variants:
+
+- **Line grid, white paper:** saves ink. Use a dark or coloured wire.
+- **Line grid, dark paper:** light lines on black, like a cutting mat. This gives
+  the best contrast for silver or shiny wire.
+- **Checkerboard:** use a copper or coloured wire, because silver disappears on
+  the white squares.
+
+Print at **100 % / Actual size**, with no "fit to page". The 100 mm bar on the
+sheet lets you check the printed scale; if it is off, enter the measured square
+size in the app.
 
 ## Taking good photos
 
@@ -68,7 +84,7 @@ stay out of the way until you ask for them.
 **Simple path**
 1. **Open** a photo by dropping it on the window or clicking *Choose photo*.
    Check the grid square size first; it defaults to 10 mm.
-2. **Check the result.** The top view shows the traced profile with its size.
+2. **Check the result.** The corrected view (perspective removed) shows the traced profile with its size.
    The result card confirms the grid was found and the perspective corrected,
    and shows the fit quality and the profile as *N arcs · M lines*.
 3. **Export DXF.** More options (origin, reference-grid layer) sit behind a
@@ -95,8 +111,9 @@ Shortcuts:
 | Key | Action |
 |---|---|
 | `Ctrl+O` | Open a photo (drag and drop also works) |
+| `Ctrl+W` | Close the photo and return to the start screen (or click × on the file name) |
 | `F5` | Run the automatic pipeline |
-| `1` / `2` | Original / rectified view |
+| `1` / `2` | Photo / corrected view |
 | `F` | Fit to window |
 | `E` | Edit tool |
 | `R` | Add reference point |
@@ -151,6 +168,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 - **`line_arc_fitting`**: known lines and arcs, sampled as a dense noisy trace and as a few hand-placed clicks, must come back with the same structure and radii (within 0.1 mm), and arcs must round-trip through the DXF bulges.
+- **`printed_calibration_sheets`**: each printable sheet (white grid, dark grid, checkerboard) is rendered with a wire on it and photographed in perspective. The pipeline must find the grid and recover the wire with a shape RMS below 0.15 mm; currently 0.05–0.06 mm.
 - **`synthetic_ground_truth`**: renders perspective photos with known geometry
   (bright and dark line grids, a checkerboard, noise, vignetting) and compares
   the result with the ground truth.

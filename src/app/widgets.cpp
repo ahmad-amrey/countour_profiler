@@ -169,7 +169,16 @@ StartPage::StartPage(QWidget* parent) : QWidget(parent) {
     auto* change = makeButton(tr("Change"));
     change->setStyleSheet("min-height: 30px; border-radius: 15px; border: none; background: #252931; font-size: 12px;");
     cl->addWidget(change);
-    outer->addWidget(chip, 0, Qt::AlignHCenter);
+    auto* chipRow = new QHBoxLayout;
+    chipRow->setSpacing(16);
+    chipRow->addStretch(1);
+    chipRow->addWidget(chip);
+    auto* printLink = makeButton(tr("Print a calibration sheet"), "link");
+    printLink->setToolTip(tr("No cutting mat? Print a grid this program reads automatically."));
+    chipRow->addWidget(printLink);
+    chipRow->addStretch(1);
+    outer->addLayout(chipRow);
+    connect(printLink, &QPushButton::clicked, this, &StartPage::printSheetRequested);
     connect(change, &QPushButton::clicked, this, &StartPage::squareChangeRequested);
 
     auto* steps = new QWidget;
@@ -468,3 +477,114 @@ int ExportDialog::format() const { return format_->index(); }
 bool ExportDialog::linesAndArcs() const { return geometry_->index() == 0 && format_->index() != 2; }
 int ExportDialog::origin() const { return origin_->currentIndex(); }
 bool ExportDialog::gridLayer() const { return grid_->isChecked(); }
+
+// --- PrintSheetDialog --------------------------------------------------------------
+PrintSheetDialog::PrintSheetDialog(QWidget* parent, double squareMM) : QDialog(parent) {
+    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setModal(true);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    auto* card = new QFrame;
+    card->setObjectName("Card");
+    card->setStyleSheet("QFrame#Card { background: #1A1D22; border-radius: 20px; }");
+    outer->addWidget(card);
+    auto* h = new QHBoxLayout(card);
+    h->setContentsMargins(24, 20, 24, 24);
+    h->setSpacing(24);
+
+    preview_ = new QLabel;
+    preview_->setFixedSize(300, 424);
+    preview_->setAlignment(Qt::AlignCenter);
+    preview_->setStyleSheet("background: #121418; border: 1px solid #262A31; border-radius: 14px;");
+    h->addWidget(preview_);
+
+    auto* l = new QVBoxLayout;
+    l->setSpacing(14);
+    auto* head = new QHBoxLayout;
+    head->addWidget(makeLabel(tr("Print a calibration sheet"), "h2"), 1);
+    auto* close = makeButton(QString(), "icon", Icon::Close, true, theme::muted);
+    head->addWidget(close);
+    l->addLayout(head);
+    connect(close, &QPushButton::clicked, this, &QDialog::reject);
+    auto* intro = makeLabel(tr("A grid this program reads automatically. Print it at 100 % (actual size) and lay "
+                               "the wire on it."),
+                            "muted");
+    intro->setWordWrap(true);
+    intro->setFixedWidth(330);
+    l->addWidget(intro);
+
+    auto row = [&](const QString& name, QWidget* w) {
+        auto* r = new QHBoxLayout;
+        r->setSpacing(14);
+        auto* lab = makeLabel(name, "muted");
+        lab->setFixedWidth(92);
+        r->addWidget(lab);
+        r->addWidget(w, 1);
+        l->addLayout(r);
+    };
+    pattern_ = new Segmented({tr("Line grid"), tr("Checkerboard")});
+    row(tr("Pattern"), pattern_);
+    background_ = new Segmented({tr("White"), tr("Dark")});
+    background_->setToolTip(tr("Dark: light lines on black, like a cutting mat. Best for silver wire (uses more ink)."));
+    row(tr("Paper"), background_);
+    square_ = new QDoubleSpinBox;
+    square_->setRange(2, 50);
+    square_->setDecimals(1);
+    square_->setValue(squareMM);
+    square_->setSuffix(" mm");
+    square_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    row(tr("Square size"), square_);
+    paper_ = new QComboBox;
+    paper_->addItem("A4", int(QPageSize::A4));
+    paper_->addItem("US Letter", int(QPageSize::Letter));
+    paper_->addItem("A3", int(QPageSize::A3));
+    row(tr("Sheet"), paper_);
+    tip_ = makeLabel(QString(), "faint");
+    tip_->setWordWrap(true);
+    tip_->setFixedWidth(330);
+    l->addWidget(tip_);
+    l->addStretch(1);
+    auto* foot = new QHBoxLayout;
+    foot->addStretch(1);
+    auto* cancel = makeButton(tr("Cancel"), "ghost");
+    cancel->setMinimumHeight(44);
+    auto* save = makeButton(tr("Save PDF…"), "primary", Icon::Download, true, theme::onAccent);
+    save->setMinimumHeight(44);
+    save->setDefault(true);
+    foot->addWidget(cancel);
+    foot->addWidget(save);
+    l->addLayout(foot);
+    h->addLayout(l);
+    connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    connect(save, &QPushButton::clicked, this, &QDialog::accept);
+    connect(pattern_, &Segmented::changed, this, [this] { refresh(); });
+    connect(background_, &Segmented::changed, this, [this] { refresh(); });
+    connect(square_, &QDoubleSpinBox::valueChanged, this, [this] { refresh(); });
+    connect(paper_, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
+    refresh();
+}
+
+SheetOptions PrintSheetDialog::options() const {
+    SheetOptions o;
+    o.checkerboard = pattern_->index() == 1;
+    o.dark = !o.checkerboard && background_->index() == 1;
+    o.squareMM = square_->value();
+    o.page = QPageSize::PageSizeId(paper_->currentData().toInt());
+    return o;
+}
+
+void PrintSheetDialog::refresh() {
+    const SheetOptions o = options();
+    background_->setEnabled(!o.checkerboard);
+    const QSizeF mm = sheetSizeMM(o);
+    const double k = std::min((preview_->width() - 24) / mm.width(), (preview_->height() - 24) / mm.height());
+    const qreal dpr = devicePixelRatioF();
+    QImage img = renderSheet(o, k * dpr);
+    img.setDevicePixelRatio(dpr);
+    preview_->setPixmap(QPixmap::fromImage(img));
+    tip_->setText(o.checkerboard ? tr("Checkerboard: use a copper or coloured wire — silver disappears on the white "
+                                      "squares.")
+                  : o.dark       ? tr("Dark paper gives silver and shiny wire the best contrast.")
+                                 : tr("White paper: use a dark or coloured wire. For silver wire choose Dark."));
+}

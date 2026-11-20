@@ -256,7 +256,7 @@ void Canvas::paintEvent(QPaintEvent*) {
         }
     }
 
-    // Reference points: always on the photo, in the top view only in details.
+    // Reference points: always on the photo, in the corrected view only in details.
     if (view_ == View::Original || details_) {
         p.setFont(theme::uiFont(11, QFont::DemiBold));
         const bool manyRefs = doc_->refs.size() > 40;
@@ -341,7 +341,7 @@ void Canvas::paintEvent(QPaintEvent*) {
         if (!details_ && view_ == View::Rectified) drawDimensions(p);
     }
 
-    // Scale bar (top view).
+    // Scale bar (corrected view).
     if (view_ == View::Rectified && doc_->rectRes > 0) {
         double mm = 1;
         for (double c : {0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0})

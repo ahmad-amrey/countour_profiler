@@ -165,6 +165,7 @@ void MainWindow::buildUi() {
     connect(start_, &StartPage::openRequested, this, &MainWindow::openImage);
     connect(start_, &StartPage::sampleRequested, this, &MainWindow::openSample);
     connect(start_, &StartPage::squareChangeRequested, this, &MainWindow::changeSquareSize);
+    connect(start_, &StartPage::printSheetRequested, this, &MainWindow::printSheet);
 
     dim_ = new QFrame(root);
     dim_->setStyleSheet("background: rgba(8,9,11,185);");
@@ -184,8 +185,11 @@ QWidget* MainWindow::buildHeader() {
     l->addWidget(logo);
     l->addWidget(makeLabel(tr("Contour Profiler"), "title"));
     l->addSpacing(8);
-    fileChip_ = makeLabel(QString(), "chip");
+    fileChip_ = makeButton(QString(), "chip", Icon::Close, true, theme::muted);
+    fileChip_->setLayoutDirection(Qt::RightToLeft);  // close icon after the name
+    fileChip_->setToolTip(tr("Close photo and go back to the start (Ctrl+W)"));
     l->addWidget(fileChip_);
+    connect(fileChip_, &QPushButton::clicked, this, &MainWindow::closeDocument);
     l->addStretch(1);
     helpBtn_ = makeButton(tr("How it works"), "ghost", Icon::Help, true, theme::muted);
     openBtn_ = makeButton(tr("Open…"), "ghost");
@@ -211,11 +215,14 @@ QWidget* MainWindow::buildHeader() {
     auto* menu = new QMenu(this);
     menu->addAction(tr("Open photo…"), QKeySequence::Open, this, &MainWindow::openImage);
     menu->addAction(tr("Open a sample photo"), this, &MainWindow::openSample);
+    menu->addAction(tr("Close photo"), QKeySequence::Close, this, &MainWindow::closeDocument);
+    menu->addSeparator();
+    menu->addAction(tr("Print a calibration sheet…"), this, &MainWindow::printSheet);
     menu->addSeparator();
     menu->addAction(tr("Export DXF…"), this, [this] { exportDialog(0); });
     menu->addAction(tr("Export SVG…"), this, [this] { exportDialog(1); });
     menu->addAction(tr("Export CSV…"), this, [this] { exportDialog(2); });
-    menu->addAction(tr("Save top-view image…"), this, &MainWindow::saveRectified);
+    menu->addAction(tr("Save corrected image…"), this, &MainWindow::saveRectified);
     menu->addSeparator();
     auto* mask = menu->addAction(tr("Show detection mask"));
     mask->setCheckable(true);
@@ -278,7 +285,14 @@ QWidget* MainWindow::buildStage() {
     l->addWidget(canvas_);
     stage_->installEventFilter(this);
 
-    viewSeg_ = new Segmented({tr("Photo"), tr("Top view")}, true, stage_);
+    viewSeg_ = new Segmented({tr("Photo"), tr("Corrected")}, true, stage_);
+    {
+        const auto btns = viewSeg_->findChildren<QPushButton*>();
+        if (btns.size() == 2) {
+            btns[0]->setToolTip(tr("The photo as taken (1)"));
+            btns[1]->setToolTip(tr("Perspective removed, true scale in mm (2)"));
+        }
+    }
     connect(viewSeg_, &Segmented::changed, this,
             [this](int i) { setView(i == 0 ? Canvas::View::Original : Canvas::View::Rectified); });
 
@@ -631,6 +645,7 @@ void MainWindow::buildActions() {
         addAction(a);
     };
     add(QKeySequence::Open, [this] { openImage(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_W), [this] { closeDocument(); });
     add(QKeySequence(Qt::CTRL | Qt::Key_E), [this] { exportDialog(0); });
     add(QKeySequence::Undo, [this] { undo(); });
     add(QKeySequence::Redo, [this] { redo(); });
@@ -743,6 +758,61 @@ void MainWindow::openSample() {
     cp::SynthParams sp;
     sp.squareMM = doc_.squareMM;
     if (toQImage(cp::renderSynthetic(sp).img).save(fn)) loadImage(fn);
+}
+
+void MainWindow::closeDocument() {
+    if (!doc_.hasImage()) return;
+    setDetails(false);
+    calibrating_ = false;
+    const double square = doc_.squareMM;
+    const bool fitOn = doc_.fitEnabled;
+    const double tol = doc_.fitTol;
+    doc_ = Document();
+    doc_.squareMM = square;
+    doc_.fitEnabled = fitOn;
+    doc_.fitTol = tol;
+    undo_.clear();
+    redo_.clear();
+    lastMessage_.clear();
+    canvas_->imageChanged();
+    canvas_->rectifiedChanged();
+    updateRefTable();
+    setWindowTitle(tr("Contour Profiler"));
+    pages_->setCurrentIndex(0);
+    updateAll();
+}
+
+void MainWindow::printSheet() {
+    PrintSheetDialog dlg(this, doc_.squareMM);
+    dim_->setGeometry(centralWidget()->rect());
+    dim_->raise();
+    dim_->show();
+    dlg.adjustSize();
+    dlg.move(mapToGlobal(QPoint((width() - dlg.width()) / 2, std::max(40, (height() - dlg.height()) / 2 - 20))));
+    const int res = dlg.exec();
+    dim_->hide();
+    if (res != QDialog::Accepted) return;
+    const SheetOptions o = dlg.options();
+    const QString def = QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                            .filePath(QString("calibration_%1mm_%2.pdf")
+                                          .arg(o.squareMM, 0, 'g', 4)
+                                          .arg(o.checkerboard ? "checkerboard" : (o.dark ? "grid_dark" : "grid")));
+    const QString fn = QFileDialog::getSaveFileName(this, tr("Save calibration sheet"), def, tr("PDF (*.pdf)"));
+    if (fn.isEmpty()) return;
+    QString err;
+    if (!writeSheetPdf(fn, o, &err)) {
+        QMessageBox::warning(this, tr("Calibration sheet"), err);
+        return;
+    }
+    if (std::fabs(o.squareMM - doc_.squareMM) > 1e-9) {
+        doc_.squareMM = o.squareMM;
+        squareSpin_->setValue(o.squareMM);
+        start_->setSquare(o.squareMM);
+    }
+    QMessageBox::information(this, tr("Calibration sheet"),
+                             tr("Saved %1.\n\nPrint it at 100 % (\"Actual size\", no scaling) and check that the bar "
+                                "at the bottom measures 100 mm.")
+                                 .arg(QFileInfo(fn).fileName()));
 }
 
 void MainWindow::changeSquareSize() {
@@ -1158,18 +1228,18 @@ void MainWindow::exportFile(int kind, bool arcs, int origin, bool grid) {
 
 void MainWindow::saveRectified() {
     if (doc_.rectified.isNull()) {
-        QMessageBox::information(this, tr("Save top-view image"), tr("No top view yet — calibrate first."));
+        QMessageBox::information(this, tr("Save corrected image"), tr("No corrected view yet — calibrate first."));
         return;
     }
     const QFileInfo fi(doc_.path);
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Save top-view image"),
-                                                    fi.absolutePath() + "/" + fi.completeBaseName() + "_topview.png",
+    const QString fn = QFileDialog::getSaveFileName(this, tr("Save corrected image"),
+                                                    fi.absolutePath() + "/" + fi.completeBaseName() + "_corrected.png",
                                                     tr("PNG image (*.png)"));
     if (fn.isEmpty()) return;
     QImage img = doc_.rectified;
     img.setDotsPerMeterX(int(std::lround(doc_.rectRes * 1000)));
     img.setDotsPerMeterY(int(std::lround(doc_.rectRes * 1000)));
-    if (!img.save(fn)) QMessageBox::warning(this, tr("Save top-view image"), tr("Cannot write %1").arg(fn));
+    if (!img.save(fn)) QMessageBox::warning(this, tr("Save corrected image"), tr("Cannot write %1").arg(fn));
 }
 
 // ---------------------------------------------------------------------------

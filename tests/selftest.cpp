@@ -8,6 +8,7 @@
 //   cp_selftest run <outdir> <square_mm> <image> [image...]
 //       Runs the automatic pipeline on real photos, writes overlays,
 //       rectified images and DXF files, and prints measurements.
+#include <QGuiApplication>
 #include <QImage>
 #include <QImageReader>
 #include <QPainter>
@@ -26,6 +27,7 @@
 #include <string>
 
 #include "calib.h"
+#include "calsheet.h"
 #include "export.h"
 #include "fit.h"
 #include "grid_detect.h"
@@ -447,6 +449,66 @@ static int cmdFit() {
     return failures;
 }
 
+// Printed calibration sheets: render each variant, draw a wire on it,
+// photograph it in perspective, and require the pipeline to read it back.
+static int cmdSheet(const QString& outdir) {
+    QDir().mkpath(outdir);
+    struct V { const char* name; bool checker, dark; QColor wire; };
+    const V variants[] = {
+        {"sheet_grid_white", false, false, QColor(150, 75, 35)},      // copper wire
+        {"sheet_grid_dark", false, true, QColor(205, 205, 212)},      // silver wire
+        {"sheet_checkerboard", true, false, QColor(190, 100, 40)},    // copper wire
+    };
+    const double kPx = 8.0;  // sheet pixels per mm
+    int failures = 0;
+    for (const V& v : variants) {
+        SheetOptions o;
+        o.checkerboard = v.checker;
+        o.dark = v.dark;
+        o.squareMM = 10;
+        writeSheetPdf(outdir + "/" + v.name + ".pdf", o);
+        QImage sheet = renderSheet(o, kPx);
+        // Wire (truth in sheet mm), drawn round-capped 0.7 mm thick.
+        std::vector<Pt> truth;
+        for (int i = 0; i <= 300; ++i) {
+            const double t = i / 300.0;
+            truth.emplace_back(75 + 60 * t, 170 - 45 * std::sin(3.14159265358979 * t) + 6 * std::sin(3 * 3.14159265358979 * t));
+        }
+        {
+            QPainter p(&sheet);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.scale(kPx, kPx);
+            p.setPen(QPen(v.wire, 0.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            QPolygonF poly;
+            for (const Pt& q : truth) poly << QPointF(q.x, q.y);
+            p.drawPolyline(poly);
+        }
+        sheet.save(outdir + "/" + v.name + "_flat.png");
+        // Perspective photo of the sheet lying on a table.
+        const ImageU8 sheetU8 = fromQImage(sheet);
+        const double W = sheet.width(), H = sheet.height();
+        Mat3 Hs2p;
+        computeHomography({Pt(0, 0), Pt(W, 0), Pt(W, H), Pt(0, H)},
+                          {Pt(520, 90), Pt(1480, 150), Pt(1760, 1440), Pt(230, 1380)}, Hs2p);
+        bool okInv = false;
+        const Mat3 Hp2s = Hs2p.inverse(&okInv);
+        ImageU8 photo;
+        warpPerspective(sheetU8, Hp2s, RectD{0, 0, 2000, 1500}, 1.0, photo);
+        for (auto& b : photo.d) b = uint8_t(std::min(255, b + 18));  // table instead of black
+        std::printf("[%s]\n", v.name);
+        const RunOut r = runPipeline(photo, v.checker ? PatternType::Checkerboard : PatternType::LineGrid, 10);
+        writeOutputs(outdir + "/" + v.name, photo, r);
+        if (!r.ok) { ++failures; std::printf("  FAIL: no profile\n"); continue; }
+        std::vector<Pt> truthMM = truth;
+        const double lenT = polylineLength(truthMM, false) + 0.7, lenE = polylineLength(r.prof.pts, false);
+        const double rms = alignedRms(truthMM, r.prof.pts);
+        const bool ok = std::fabs(lenE - lenT) / lenT < 0.03 && rms < 0.15;
+        std::printf("  length %.2f vs %.2f mm, shape RMS %.3f mm  %s\n", lenE, lenT, rms, ok ? "PASS" : "FAIL");
+        if (!ok) ++failures;
+    }
+    return failures;
+}
+
 static int cmdRun(const QString& outdir, double square, const QStringList& files) {
     QDir().mkpath(outdir);
     int failures = 0;
@@ -482,6 +544,14 @@ int main(int argc, char** argv) {
         return cmdRun(argv[2], QString(argv[3]).toDouble(), files);
     }
     if (argc >= 2 && QString(argv[1]) == "fit") return cmdFit();
+    if (argc >= 3 && QString(argv[1]) == "sheet") {
+        // Text rendering needs a GUI application; no window is ever shown.
+#if !defined(_WIN32) && !defined(__APPLE__)
+        if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) qputenv("QT_QPA_PLATFORM", "offscreen");
+#endif
+        QGuiApplication app(argc, argv);
+        return cmdSheet(argv[2]);
+    }
     if (argc >= 6 && QString(argv[1]) == "consistency") {
         QStringList files;
         for (int i = 4; i < argc; ++i) files << QString::fromLocal8Bit(argv[i]);
