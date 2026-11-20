@@ -1,0 +1,23 @@
+# Build trees
+build/
+build-*/
+out/
+cmake-build-*/
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.user
+CMakeUserPresets.json
+
+# Generated test output
+test-output/
+
+# Never commit original camera photos (they carry EXIF metadata such as
+# device, timestamps and possibly GPS). Use tests/data (metadata-stripped).
+*.jpeg
+*.JPG
+*.heic
+*.HEIC
+!tests/data/*.jpg
