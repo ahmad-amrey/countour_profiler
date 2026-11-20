@@ -1,8 +1,12 @@
+<p align="center"><img src="resources/icon_128.png" width="96" alt="Contour Profiler logo"></p>
+
 # Contour Profiler
 
 Capture real-world 2D profiles (mouldings, pipes, curved edges, tool shapes...)
 with nothing more than a piece of wire, a square pattern and a phone camera,
 and get a dimensionally correct **DXF** for CAD.
+
+![Contour Profiler: a photo of a bent wire on a cutting mat, perspective-corrected and traced](docs/screenshot.jpg)
 
 1. Bend a wire or thin metal strip over the contour you want to copy.
 2. Lay it on a square pattern: a cutting mat, graph paper or a printed checkerboard.
@@ -43,7 +47,9 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
     SolidWorks, QCAD, DraftSight, Inkscape and others.
   - SVG with a mm viewBox.
   - CSV.
-  - Optional spline smoothing and a reference-grid layer.
+  - Origin at the profile corner or the grid origin, and an optional
+    reference-grid layer.
+- **English and Arabic** interface, with a full right-to-left layout.
 
 > **DWG:** DWG is a closed Autodesk format. Open the DXF in your CAD program and
 > *Save As* DWG, or batch-convert with the free ODA File Converter.
@@ -98,6 +104,8 @@ automatically.
 shape. They are turned into lines and arcs automatically, so three or four
 clicks on a curve become one true arc.
 
+![Lines & arcs view: lines in blue, arcs in orange, with the segment list](docs/screenshot_lines_arcs.jpg)
+
 Shortcuts:
 
 | Key | Action |
@@ -110,8 +118,9 @@ Shortcuts:
 | `E` | Edit tool |
 | `R` | Add reference point |
 | `D` | Draw profile |
-| `O` | Pick object |
-| `C` | Pick colour |
+| `O` | Pick the wire |
+| `C` | Pick wire colour |
+| `Esc` | Finish the current tool |
 | Wheel | Zoom |
 | Middle drag, or drag empty space | Pan |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
@@ -124,6 +133,8 @@ Command line: `ContourProfiler [photo]`
 English and **Arabic (العربية)**, with a full right-to-left layout. Switch with
 the language button in the header, or ⋯ › Language. The switch is instant:
 the open photo, edits and settings are kept, and the choice is remembered.
+
+<img src="docs/screenshot_arabic.jpg" width="720" alt="The interface in Arabic, right-to-left">
 
 To add or update a language, edit the string table (`src/app/i18n_ar.inc` for
 Arabic) and check coverage:
@@ -258,3 +269,15 @@ tests/      self-test / batch tool, reference photos
   plane. That effect is negligible for thin wire and a camera more than ~20 cm away.
 - Detection needs some contrast between the wire and the pattern. If automatic
   detection fails, use colour mode, adjust the threshold or draw the profile by hand.
+
+## License
+
+[MIT](LICENSE) © 2026 Ahmad AlAmrey
+
+## Third-party software
+
+Built with [Qt 6](https://www.qt.io/) (Core, Gui, Widgets), used under the
+GNU LGPL v3 and linked dynamically. When you distribute binaries, ship the Qt
+libraries as separate files (`windeployqt6` / `macdeployqt` do this) and point
+users to the Qt source code. Everything else (`src/core`) uses only the C++
+standard library.

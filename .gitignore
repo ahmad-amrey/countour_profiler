@@ -3,6 +3,7 @@ build/
 build-*/
 out/
 cmake-build-*/
+_deps/
 
 # IDE / editor
 .vs/
@@ -10,14 +11,30 @@ cmake-build-*/
 .idea/
 *.user
 CMakeUserPresets.json
+*.swp
+
+# OS clutter
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python tool caches
+__pycache__/
+*.pyc
 
 # Generated test output
 test-output/
 
-# Never commit original camera photos (they carry EXIF metadata such as
-# device, timestamps and possibly GPS). Use tests/data (metadata-stripped).
+# Never commit original camera photos: they carry EXIF metadata such as the
+# device, timestamps and possibly GPS. Only metadata-stripped copies made for
+# the tests and the README screenshots are allowed.
+*.jpg
 *.jpeg
 *.JPG
+*.JPEG
 *.heic
 *.HEIC
+*.dng
+*.DNG
 !tests/data/*.jpg
+!docs/*.jpg
