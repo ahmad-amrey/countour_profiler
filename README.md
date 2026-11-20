@@ -204,8 +204,8 @@ CMake options: `-DCP_BUILD_GUI=OFF` builds only the core and the tests;
 2. Tag the commit with the same version and push the tag:
 
    ```bash
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v0.1.0
+   git push origin v0.1.0
    ```
 
 The `release` workflow checks that the tag matches the version, builds and

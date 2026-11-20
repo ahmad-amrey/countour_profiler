@@ -1,7 +1,7 @@
 name: release
 
 # Publishes a GitHub Release with ready-to-run downloads when a version tag
-# is pushed:  git tag v0.3.0 && git push origin v0.3.0
+# is pushed:  git tag v0.1.0 && git push origin v0.1.0
 # The tag must match project(VERSION) in CMakeLists.txt.
 # "Run workflow" (manual) builds the packages as run artifacts without
 # publishing a release, to try the packaging.
