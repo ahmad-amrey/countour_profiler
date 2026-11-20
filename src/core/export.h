@@ -10,6 +10,9 @@ namespace cp {
 
 struct ExportPolyline {
     std::vector<Pt> pts;  // millimetres, CAD convention (Y up)
+    // Optional arc bulges: bulge[i] bends the segment pts[i] -> pts[i+1]
+    // (tan(sweep/4), positive = counter-clockwise). Empty = straight lines.
+    std::vector<double> bulge;
     bool closed = false;
     std::string layer = "PROFILE";
     int color = 7;  // AutoCAD colour index

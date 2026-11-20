@@ -902,6 +902,14 @@ GridResult detectGrid(const ImageF& full, PatternType type) {
             std::vector<Key> keys;
             for (auto& kv : localBest) keys.push_back(kv.first);
             if (localBest.size() < 4 || !spansTwoAxes(keys)) return;
+            // A real grid has complete unit cells; a chain of points along a
+            // curve or an edge does not.
+            int cells = 0;
+            for (auto& kv : localBest) {
+                const int i = kv.first.first, j = kv.first.second;
+                if (localBest.count({i + 1, j}) && localBest.count({i, j + 1}) && localBest.count({i + 1, j + 1})) ++cells;
+            }
+            if (cells < (type == PatternType::Checkerboard ? 2 : 1)) return;
             if (localBest.size() > best.nodes.size()) {
                 best.nodes = localBest;
                 best.pts = pts;
@@ -985,6 +993,21 @@ GridResult detectGrid(const ImageF& full, PatternType type) {
     if (!fitLattice(refined, getP, H)) {
         R.message = "Grid fit failed after refinement";
         return R;
+    }
+    {
+        // Reject lattices that do not behave like a planar grid.
+        std::vector<double> rr, st;
+        for (auto& [key, p] : refined) {
+            const Pt l(key.first, key.second);
+            rr.push_back(dist(H.apply(l), p));
+            st.push_back(dist(H.apply(l), H.apply(l + Pt(1, 0))));
+        }
+        double s2 = 0;
+        for (double r : rr) s2 += r * r;
+        if (std::sqrt(s2 / rr.size()) > 0.06 * medianOf(st)) {
+            R.message = "No consistent grid found. Place reference points manually.";
+            return R;
+        }
     }
 
     std::vector<double> res, steps;

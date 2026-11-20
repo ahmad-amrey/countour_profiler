@@ -1,38 +1,46 @@
 #include "mainwindow.h"
 
 #include <QAction>
-#include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QImageReader>
+#include <QInputDialog>
 #include <QLabel>
-#include <QMenuBar>
+#include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
-#include <QSplitter>
+#include <QSlider>
+#include <QStackedWidget>
+#include <QStandardPaths>
 #include <QStatusBar>
 #include <QTableWidget>
-#include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 
 #include "profile_detect.h"
 #include "synth.h"
+#include "theme.h"
+#include "widgets.h"
+
+using theme::Icon;
 
 namespace {
 
@@ -50,21 +58,67 @@ cp::ImageU8 fromQImage(const QImage& in) {
     return im;
 }
 
-QDoubleSpinBox* spin(double lo, double hi, double val, int dec, double step, const QString& suffix = {}) {
-    auto* s = new QDoubleSpinBox;
-    s->setRange(lo, hi);
-    s->setDecimals(dec);
-    s->setSingleStep(step);
-    s->setValue(val);
-    if (!suffix.isEmpty()) s->setSuffix(suffix);
-    s->setKeyboardTracking(false);
-    return s;
-}
-
 cp::RectD intersect(const cp::RectD& a, const cp::RectD& b) {
     if (!b.valid()) return a;
     cp::RectD r{std::max(a.x0, b.x0), std::max(a.y0, b.y0), std::min(a.x1, b.x1), std::min(a.y1, b.y1)};
     return r.valid() ? r : a;
+}
+
+// "3 arcs · 2 lines" with correct singulars.
+QString geometrySummary(int arcs, int lines, const QString& sep) {
+    const QString a = arcs == 1 ? QObject::tr("1 arc") : QObject::tr("%1 arcs").arg(arcs);
+    const QString l = lines == 1 ? QObject::tr("1 line") : QObject::tr("%1 lines").arg(lines);
+    if (arcs == 0) return l;
+    if (lines == 0) return a;
+    return a + sep + l;
+}
+
+// Slider positions <-> values.
+double tolFromSlider(int v) { return 0.01 * std::pow(100.0, v / 100.0); }      // 0.01 .. 1 mm
+int sliderFromTol(double t) { return int(std::lround(100.0 * std::log(t / 0.01) / std::log(100.0))); }
+
+QWidget* sliderRow(const QString& name, QSlider*& slider, QLabel*& value, int lo, int hi, int val) {
+    auto* w = new QWidget;
+    auto* l = new QVBoxLayout(w);
+    l->setContentsMargins(0, 0, 0, 0);
+    l->setSpacing(4);
+    auto* top = new QHBoxLayout;
+    top->addWidget(makeLabel(name, "small"), 1);
+    value = makeLabel(QString(), "value");
+    top->addWidget(value);
+    l->addLayout(top);
+    slider = new QSlider(Qt::Horizontal);
+    slider->setRange(lo, hi);
+    slider->setValue(val);
+    slider->setCursor(Qt::PointingHandCursor);
+    l->addWidget(slider);
+    return w;
+}
+
+QWidget* section(QVBoxLayout*& body) {
+    auto* w = new QWidget;
+    w->setObjectName("PanelPage");
+    body = new QVBoxLayout(w);
+    body->setContentsMargins(20, 14, 20, 18);
+    body->setSpacing(12);
+    return w;
+}
+
+QToolButton* toolButton(Icon ic, const QString& tip, bool checkable = true) {
+    auto* b = new QToolButton;
+    b->setProperty("variant", "tool");
+    b->setCheckable(checkable);
+    b->setToolTip(tip);
+    QIcon icon;
+    for (qreal dpr : {1.0, 2.0}) {
+        icon.addPixmap(theme::pixmap(ic, theme::muted, 19, dpr), QIcon::Normal, QIcon::Off);
+        icon.addPixmap(theme::pixmap(ic, theme::accent, 19, dpr), QIcon::Normal, QIcon::On);
+        icon.addPixmap(theme::pixmap(ic, QColor("#4A505A"), 19, dpr), QIcon::Disabled, QIcon::Off);
+    }
+    b->setIcon(icon);
+    b->setIconSize(QSize(19, 19));
+    b->setCursor(Qt::PointingHandCursor);
+    return b;
 }
 
 }  // namespace
@@ -72,404 +126,606 @@ cp::RectD intersect(const cp::RectD& a, const cp::RectD& b) {
 MainWindow::MainWindow() {
     setWindowTitle(tr("Contour Profiler"));
     setAcceptDrops(true);
+    setMinimumSize(1100, 720);
     buildUi();
+    buildActions();
     rectTimer_.setSingleShot(true);
     rectTimer_.setInterval(250);
     connect(&rectTimer_, &QTimer::timeout, this, &MainWindow::rebuildRectified);
-    resize(1400, 900);
-    updateInfo();
+    resize(1440, 900);
+    updateAll();
 }
 
 // ---------------------------------------------------------------------------
 // UI construction
 // ---------------------------------------------------------------------------
 void MainWindow::buildUi() {
-    canvas_ = new Canvas(&doc_);
-    auto* scroll = new QScrollArea;
-    scroll->setWidget(buildPanel());
-    scroll->setWidgetResizable(true);
-    scroll->setMinimumWidth(380);
-    auto* split = new QSplitter;
-    split->addWidget(canvas_);
-    split->addWidget(scroll);
-    split->setStretchFactor(0, 1);
-    split->setStretchFactor(1, 0);
-    setCentralWidget(split);
+    auto* root = new QWidget;
+    root->setObjectName("Root");
+    auto* v = new QVBoxLayout(root);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(0);
+    v->addWidget(buildHeader());
 
-    cursorLabel_ = new QLabel;
-    statusBar()->addPermanentWidget(cursorLabel_);
+    pages_ = new QStackedWidget;
+    start_ = new StartPage;
+    pages_->addWidget(start_);
+    auto* work = new QWidget;
+    auto* h = new QHBoxLayout(work);
+    h->setContentsMargins(0, 0, 0, 0);
+    h->setSpacing(0);
+    h->addWidget(buildRail());
+    h->addWidget(buildStage(), 1);
+    h->addWidget(buildPanel());
+    pages_->addWidget(work);
+    v->addWidget(pages_, 1);
+    setCentralWidget(root);
+    statusBar()->hide();
 
-    // Actions.
-    auto* openAct = new QAction(tr("&Open photo..."), this);
-    openAct->setShortcut(QKeySequence::Open);
-    connect(openAct, &QAction::triggered, this, &MainWindow::openImage);
-    auto* autoAct = new QAction(tr("Auto &detect all"), this);
-    autoAct->setShortcut(QKeySequence(Qt::Key_F5));
-    autoAct->setToolTip(tr("Detect grid, calibrate and extract the profile (F5)"));
-    connect(autoAct, &QAction::triggered, this, &MainWindow::runAutomatic);
-    auto* dxfAct = new QAction(tr("Export &DXF..."), this);
-    dxfAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_E));
-    connect(dxfAct, &QAction::triggered, this, [this] { exportProfile(0); });
-    auto* svgAct = new QAction(tr("Export &SVG..."), this);
-    connect(svgAct, &QAction::triggered, this, [this] { exportProfile(1); });
-    auto* csvAct = new QAction(tr("Export &CSV..."), this);
-    connect(csvAct, &QAction::triggered, this, [this] { exportProfile(2); });
-    auto* rectAct = new QAction(tr("Save &rectified image..."), this);
-    connect(rectAct, &QAction::triggered, this, &MainWindow::saveRectified);
-    auto* sampleAct = new QAction(tr("Create &sample photo..."), this);
-    connect(sampleAct, &QAction::triggered, this, [this] {
-        const QString fn = QFileDialog::getSaveFileName(this, tr("Save sample photo"), "sample_linegrid.png",
-                                                        tr("PNG image (*.png)"));
-        if (fn.isEmpty()) return;
-        cp::SynthParams sp;
-        const cp::SynthResult s = cp::renderSynthetic(sp);
-        if (toQImage(s.img).save(fn)) loadImage(fn);
-    });
-    auto* quitAct = new QAction(tr("&Quit"), this);
-    quitAct->setShortcut(QKeySequence::Quit);
-    connect(quitAct, &QAction::triggered, this, &QWidget::close);
+    connect(start_, &StartPage::openRequested, this, &MainWindow::openImage);
+    connect(start_, &StartPage::sampleRequested, this, &MainWindow::openSample);
+    connect(start_, &StartPage::squareChangeRequested, this, &MainWindow::changeSquareSize);
 
-    undoAct_ = new QAction(tr("&Undo"), this);
-    undoAct_->setShortcut(QKeySequence::Undo);
-    connect(undoAct_, &QAction::triggered, this, &MainWindow::undo);
-    redoAct_ = new QAction(tr("&Redo"), this);
-    redoAct_->setShortcuts({QKeySequence::Redo, QKeySequence(Qt::CTRL | Qt::Key_Y)});
-    connect(redoAct_, &QAction::triggered, this, &MainWindow::redo);
+    dim_ = new QFrame(root);
+    dim_->setStyleSheet("background: rgba(8,9,11,185);");
+    dim_->hide();
+}
 
-    auto* viewGroup = new QActionGroup(this);
-    viewOrigAct_ = new QAction(tr("&Original photo"), viewGroup);
-    viewOrigAct_->setShortcut(QKeySequence(Qt::Key_1));
-    viewRectAct_ = new QAction(tr("&Rectified (top view)"), viewGroup);
-    viewRectAct_->setShortcut(QKeySequence(Qt::Key_2));
-    for (QAction* a : {viewOrigAct_, viewRectAct_}) a->setCheckable(true);
-    viewOrigAct_->setChecked(true);
-    connect(viewOrigAct_, &QAction::triggered, this, [this] { setView(Canvas::View::Original); });
-    connect(viewRectAct_, &QAction::triggered, this, [this] { setView(Canvas::View::Rectified); });
-    auto* fitAct = new QAction(tr("&Fit to window"), this);
-    fitAct->setShortcut(QKeySequence(Qt::Key_F));
-    connect(fitAct, &QAction::triggered, canvas_, &Canvas::fitToWindow);
-    auto* gridAct = new QAction(tr("Show calibrated &grid"), this);
-    gridAct->setCheckable(true);
-    gridAct->setChecked(true);
-    connect(gridAct, &QAction::toggled, canvas_, &Canvas::setShowGrid);
-    auto* maskAct = new QAction(tr("Show detection &mask"), this);
-    maskAct->setCheckable(true);
-    maskAct->setChecked(true);
-    connect(maskAct, &QAction::toggled, canvas_, &Canvas::setShowMask);
-    auto* candAct = new QAction(tr("Show corner &candidates"), this);
-    candAct->setCheckable(true);
-    connect(candAct, &QAction::toggled, canvas_, &Canvas::setShowCandidates);
-
-    auto* toolGroup = new QActionGroup(this);
-    const char* toolNames[5] = {QT_TR_NOOP("Edit"), QT_TR_NOOP("Add reference"), QT_TR_NOOP("Draw profile"),
-                                QT_TR_NOOP("Pick object"), QT_TR_NOOP("Pick colour")};
-    const char* toolTips[5] = {
-        QT_TR_NOOP("Drag reference points and profile vertices; Ctrl+click/double-click inserts; right-click deletes (E)"),
-        QT_TR_NOOP("Click known marks on the pattern to add reference points (R)"),
-        QT_TR_NOOP("Draw the profile by hand, click by click (D)"),
-        QT_TR_NOOP("Click the wire to make it the detected object (O)"),
-        QT_TR_NOOP("Click the wire to detect it by its colour (C)")};
-    const Qt::Key keys[5] = {Qt::Key_E, Qt::Key_R, Qt::Key_D, Qt::Key_O, Qt::Key_C};
-    for (int i = 0; i < 5; ++i) {
-        toolActs_[i] = new QAction(tr(toolNames[i]), toolGroup);
-        toolActs_[i]->setCheckable(true);
-        toolActs_[i]->setToolTip(tr(toolTips[i]));
-        toolActs_[i]->setShortcut(QKeySequence(keys[i]));
-        connect(toolActs_[i], &QAction::triggered, this, [this, i] { setTool(Canvas::Tool(i)); });
-    }
-    toolActs_[0]->setChecked(true);
-
-    auto* guideAct = new QAction(tr("Quick &guide"), this);
-    guideAct->setShortcut(QKeySequence::HelpContents);
-    connect(guideAct, &QAction::triggered, this, [this] {
+QWidget* MainWindow::buildHeader() {
+    auto* hdr = new QWidget;
+    hdr->setObjectName("Header");
+    hdr->setAttribute(Qt::WA_StyledBackground);
+    hdr->setFixedHeight(56);
+    auto* l = new QHBoxLayout(hdr);
+    l->setContentsMargins(20, 0, 12, 0);
+    l->setSpacing(10);
+    auto* logo = new QLabel;
+    logo->setPixmap(theme::pixmap(Icon::Logo, theme::accent, 26, devicePixelRatioF()));
+    l->addWidget(logo);
+    l->addWidget(makeLabel(tr("Contour Profiler"), "title"));
+    l->addSpacing(8);
+    fileChip_ = makeLabel(QString(), "chip");
+    l->addWidget(fileChip_);
+    l->addStretch(1);
+    helpBtn_ = makeButton(tr("How it works"), "ghost", Icon::Help, true, theme::muted);
+    openBtn_ = makeButton(tr("Open…"), "ghost");
+    exportBtn_ = makeButton(tr("Export DXF"), "primary", Icon::Download, true, theme::onAccent);
+    moreBtn_ = makeButton(QString(), "icon", Icon::More, true, theme::muted);
+    moreBtn_->setToolTip(tr("More"));
+    for (auto* b : {helpBtn_, openBtn_, exportBtn_}) l->addWidget(b);
+    l->addWidget(moreBtn_);
+    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openImage);
+    connect(exportBtn_, &QPushButton::clicked, this, [this] { exportDialog(0); });
+    connect(helpBtn_, &QPushButton::clicked, this, [this] {
         QMessageBox::information(
-            this, tr("Quick guide"),
-            tr("<b>Capture</b><br>Bend a wire or thin metal strip over the shape, lay it on a square pattern "
-               "(cutting mat, graph paper, checkerboard) and take a photo from any angle. Keep the whole wire on "
-               "the pattern and avoid strong glare.<br><br>"
-               "<b>1. Open the photo</b> - the grid is detected, the perspective corrected and the profile "
-               "extracted automatically.<br>"
-               "<b>2. Check the calibration</b> - the cyan grid must lie on the pattern lines. Set the true "
-               "square size. Wrong? Drag reference points, delete bad ones (right-click) or add your own "
-               "(Add reference) and type their mm coordinates in the table.<br>"
-               "<b>3. Check the profile</b> in the rectified view. Wrong object? Use Pick object. Low contrast? "
-               "Use Pick colour or change the threshold. Edit vertices by dragging; Ctrl+click inserts, "
-               "right-click deletes, or draw it by hand.<br>"
-               "<b>4. Export</b> DXF (mm) for CAD, SVG or CSV."));
+            this, tr("How it works"),
+            tr("<p><b>1. Bend</b> a wire or thin metal strip over the shape you want to copy.</p>"
+               "<p><b>2. Photograph</b> it lying on a grid (cutting mat, graph paper or checkerboard) from any "
+               "angle. Keep the whole wire on the grid; avoid glare.</p>"
+               "<p><b>3. Open</b> the photo: the grid is found, perspective and scale corrected and the wire traced "
+               "automatically, then rebuilt as clean lines and arcs.</p>"
+               "<p><b>4. Export</b> a DXF in millimetres. Need to fix something? <b>Adjust</b> opens every detail."
+               "</p>"));
     });
-    auto* aboutAct = new QAction(tr("&About"), this);
-    connect(aboutAct, &QAction::triggered, this, [this] {
+
+    auto* menu = new QMenu(this);
+    menu->addAction(tr("Open photo…"), QKeySequence::Open, this, &MainWindow::openImage);
+    menu->addAction(tr("Open a sample photo"), this, &MainWindow::openSample);
+    menu->addSeparator();
+    menu->addAction(tr("Export DXF…"), this, [this] { exportDialog(0); });
+    menu->addAction(tr("Export SVG…"), this, [this] { exportDialog(1); });
+    menu->addAction(tr("Export CSV…"), this, [this] { exportDialog(2); });
+    menu->addAction(tr("Save top-view image…"), this, &MainWindow::saveRectified);
+    menu->addSeparator();
+    auto* mask = menu->addAction(tr("Show detection mask"));
+    mask->setCheckable(true);
+    mask->setChecked(false);
+    connect(mask, &QAction::toggled, this, [this](bool on) { canvas_->setShowMask(on); });
+    auto* cand = menu->addAction(tr("Show grid corner candidates"));
+    cand->setCheckable(true);
+    connect(cand, &QAction::toggled, this, [this](bool on) { canvas_->setShowCandidates(on); });
+    menu->addSeparator();
+    menu->addAction(tr("How it works"), this, [this] { helpBtn_->click(); });
+    menu->addAction(tr("About Contour Profiler"), this, [this] {
         QMessageBox::about(this, tr("About Contour Profiler"),
-                           tr("<b>Contour Profiler %1</b><br>Extracts 2D profiles from perspective photos of a "
-                              "bent wire on a calibration pattern and exports them as DXF/SVG/CSV.<br><br>"
-                              "Built with Qt %2.")
+                           tr("<b>Contour Profiler %1</b><br>2D profiles from photos of a bent wire on a grid, "
+                              "exported as clean lines and arcs.<br><br>Built with Qt %2.")
                                .arg(QApplication::applicationVersion(), QT_VERSION_STR));
     });
+    connect(moreBtn_, &QPushButton::clicked, this,
+            [this, menu] { menu->popup(moreBtn_->mapToGlobal(QPoint(moreBtn_->width() - menu->sizeHint().width(), moreBtn_->height() + 4))); });
+    return hdr;
+}
 
-    // Menus.
-    QMenu* fm = menuBar()->addMenu(tr("&File"));
-    fm->addAction(openAct);
-    fm->addAction(sampleAct);
-    fm->addSeparator();
-    fm->addAction(dxfAct);
-    fm->addAction(svgAct);
-    fm->addAction(csvAct);
-    fm->addAction(rectAct);
-    fm->addSeparator();
-    fm->addAction(quitAct);
-    QMenu* em = menuBar()->addMenu(tr("&Edit"));
-    em->addAction(undoAct_);
-    em->addAction(redoAct_);
-    em->addSeparator();
-    for (QAction* a : toolActs_) em->addAction(a);
-    em->addSeparator();
-    em->addAction(autoAct);
-    QMenu* vm = menuBar()->addMenu(tr("&View"));
-    vm->addAction(viewOrigAct_);
-    vm->addAction(viewRectAct_);
-    vm->addAction(fitAct);
-    vm->addSeparator();
-    vm->addAction(gridAct);
-    vm->addAction(maskAct);
-    vm->addAction(candAct);
-    QMenu* hm = menuBar()->addMenu(tr("&Help"));
-    hm->addAction(guideAct);
-    hm->addAction(aboutAct);
+QWidget* MainWindow::buildRail() {
+    rail_ = new QWidget;
+    rail_->setObjectName("Rail");
+    rail_->setAttribute(Qt::WA_StyledBackground);
+    rail_->setFixedWidth(60);
+    auto* l = new QVBoxLayout(rail_);
+    l->setContentsMargins(9, 14, 9, 14);
+    l->setSpacing(6);
+    const Icon icons[5] = {Icon::Pointer, Icon::AddPoint, Icon::Draw, Icon::Target, Icon::Pipette};
+    const QString tips[5] = {tr("Edit points (E)\nDrag points · double-click the line to add · right-click to delete"),
+                             tr("Add reference point (R)\nClick a known mark on the grid"),
+                             tr("Draw profile (D)\nClick to place points; they become lines and arcs"),
+                             tr("Pick the wire (O)\nClick the wire if something else was traced"),
+                             tr("Pick wire colour (C)\nDetect the wire by its colour")};
+    const int order[5] = {0, 2, 3, 4, 1};  // edit, draw, pick wire, pick colour, add reference
+    for (int k = 0; k < 5; ++k) {
+        const int i = order[k];
+        toolBtns_[i] = toolButton(icons[i], tips[i]);
+        l->addWidget(toolBtns_[i], 0, Qt::AlignHCenter);
+        connect(toolBtns_[i], &QToolButton::clicked, this, [this, i] { setTool(Canvas::Tool(i)); });
+    }
+    toolBtns_[0]->setChecked(true);
+    rail_->setVisible(false);  // shown with the details tier
+    l->addStretch(1);
+    undoBtn_ = toolButton(Icon::Undo, tr("Undo (Ctrl+Z)"), false);
+    redoBtn_ = toolButton(Icon::Redo, tr("Redo (Ctrl+Y)"), false);
+    l->addWidget(undoBtn_, 0, Qt::AlignHCenter);
+    l->addWidget(redoBtn_, 0, Qt::AlignHCenter);
+    connect(undoBtn_, &QToolButton::clicked, this, &MainWindow::undo);
+    connect(redoBtn_, &QToolButton::clicked, this, &MainWindow::redo);
+    return rail_;
+}
 
-    // Toolbar.
-    QToolBar* tb = addToolBar(tr("Main"));
-    tb->setMovable(false);
-    tb->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    tb->addAction(openAct);
-    tb->addAction(autoAct);
-    tb->addSeparator();
-    tb->addAction(viewOrigAct_);
-    tb->addAction(viewRectAct_);
-    tb->addSeparator();
-    for (QAction* a : toolActs_) tb->addAction(a);
-    tb->addSeparator();
-    tb->addAction(undoAct_);
-    tb->addAction(redoAct_);
-    tb->addSeparator();
-    tb->addAction(dxfAct);
+QWidget* MainWindow::buildStage() {
+    stage_ = new QWidget;
+    auto* l = new QVBoxLayout(stage_);
+    l->setContentsMargins(0, 0, 0, 0);
+    canvas_ = new Canvas(&doc_);
+    l->addWidget(canvas_);
+    stage_->installEventFilter(this);
+
+    viewSeg_ = new Segmented({tr("Photo"), tr("Top view")}, true, stage_);
+    connect(viewSeg_, &Segmented::changed, this,
+            [this](int i) { setView(i == 0 ? Canvas::View::Original : Canvas::View::Rectified); });
+
+    zoomBox_ = new QFrame(stage_);
+    zoomBox_->setObjectName("FloatBox");
+    auto* zl = new QVBoxLayout(zoomBox_);
+    zl->setContentsMargins(4, 4, 4, 4);
+    zl->setSpacing(2);
+    struct Z { Icon ic; QString tip; std::function<void()> fn; };
+    const Z zs[3] = {{Icon::Plus, tr("Zoom in"), [this] { canvas_->zoomBy(1.25); }},
+                     {Icon::Minus, tr("Zoom out"), [this] { canvas_->zoomBy(0.8); }},
+                     {Icon::Fit, tr("Fit to window (F)"), [this] { canvas_->fitToWindow(); }}};
+    for (const Z& z : zs) {
+        auto* b = makeButton(QString(), "icon", z.ic, true, theme::text);
+        b->setToolTip(z.tip);
+        b->setFixedSize(36, 36);
+        b->setStyleSheet("max-width: 36px; min-width: 36px; min-height: 36px;");
+        zl->addWidget(b);
+        connect(b, &QPushButton::clicked, this, z.fn);
+    }
+
+    resultCard_ = new ResultCard(stage_);
+    connect(resultCard_, &ResultCard::adjustRequested, this, [this] { setDetails(true); });
+    connect(resultCard_, &ResultCard::exportRequested, this, [this] { exportDialog(0); });
+
+    calibCard_ = new CalibrateCard(stage_);
+    connect(calibCard_, &CalibrateCard::undoRequested, this, [this] {
+        if (doc_.refs.empty()) return;
+        pushUndo();
+        doc_.refs.pop_back();
+        recalibrate(true);
+    });
+    connect(calibCard_, &CalibrateCard::retryRequested, this, &MainWindow::runAutomatic);
+
+    hint_ = makeLabel(QString(), "hint");
+    hint_->setParent(stage_);
 
     // Canvas signals.
     connect(canvas_, &Canvas::aboutToModify, this, &MainWindow::pushUndo);
     connect(canvas_, &Canvas::refsChanged, this, &MainWindow::recalibrate);
-    connect(canvas_, &Canvas::profileChanged, this, &MainWindow::updateInfo);
+    connect(canvas_, &Canvas::profileChanged, this, &MainWindow::refit);
     connect(canvas_, &Canvas::addRefRequested, this, &MainWindow::addReference);
     connect(canvas_, &Canvas::pickObjectRequested, this,
             [this](QPointF w) { detectProfile(true, cp::Pt(w.x(), w.y())); });
     connect(canvas_, &Canvas::pickColorRequested, this, &MainWindow::pickColor);
-    connect(canvas_, &Canvas::cursorInfo, cursorLabel_, &QLabel::setText);
     connect(canvas_, &Canvas::toolChanged, this, &MainWindow::setTool);
     connect(canvas_, &Canvas::refSelected, this, [this](int i) {
         if (i >= 0 && i < refTable_->rowCount()) refTable_->selectRow(i);
     });
+    return stage_;
 }
 
 QWidget* MainWindow::buildPanel() {
-    auto* panel = new QWidget;
-    auto* vl = new QVBoxLayout(panel);
+    panelScroll_ = new QScrollArea;
+    panelScroll_->setObjectName("PanelScroll");
+    panelScroll_->setFixedWidth(372);
+    panelScroll_->setWidgetResizable(true);
+    panelScroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    panelStack_ = new QStackedWidget;
+    panelStack_->setObjectName("Panel");
+    panelScroll_->setWidget(panelStack_);
 
-    // 1. Calibration pattern.
-    auto* g1 = new QGroupBox(tr("1  Calibration pattern"));
-    auto* f1 = new QFormLayout(g1);
-    patternCombo_ = new QComboBox;
-    patternCombo_->addItems({tr("Line grid (cutting mat, graph paper)"), tr("Checkerboard")});
-    f1->addRow(tr("Pattern"), patternCombo_);
-    squareSpin_ = spin(0.1, 1000, 10, 3, 0.5, tr(" mm"));
-    squareSpin_->setToolTip(tr("Real size of one grid square"));
-    f1->addRow(tr("Square size"), squareSpin_);
-    auto* detBtn = new QPushButton(tr("Detect grid"));
-    f1->addRow(detBtn);
-    gridInfo_ = new QLabel(tr("No photo loaded."));
-    gridInfo_->setWordWrap(true);
-    f1->addRow(gridInfo_);
-    autoCheck_ = new QCheckBox(tr("Run everything automatically when a photo is opened"));
-    autoCheck_->setChecked(true);
-    f1->addRow(autoCheck_);
-    vl->addWidget(g1);
-    connect(detBtn, &QPushButton::clicked, this, &MainWindow::detectGrid);
-    connect(squareSpin_, &QDoubleSpinBox::valueChanged, this, &MainWindow::applySquareSize);
+    auto* page = new QWidget;
+    page->setObjectName("PanelPage");
+    auto* v = new QVBoxLayout(page);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(0);
 
-    // 2. Reference points.
-    auto* g2 = new QGroupBox(tr("2  Reference points (perspective && scale)"));
-    auto* v2 = new QVBoxLayout(g2);
-    refTable_ = new QTableWidget(0, 6);
-    refTable_->setHorizontalHeaderLabels({"#", tr("x px"), tr("y px"), tr("X mm"), tr("Y mm"), tr("err mm")});
-    refTable_->verticalHeader()->setVisible(false);
-    refTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    refTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    refTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    refTable_->setMinimumHeight(170);
-    v2->addWidget(refTable_);
-    auto* h2 = new QHBoxLayout;
-    auto* addBtn = new QPushButton(tr("Add point"));
-    auto* delBtn = new QPushButton(tr("Delete"));
-    auto* clrBtn = new QPushButton(tr("Clear all"));
-    h2->addWidget(addBtn);
-    h2->addWidget(delBtn);
-    h2->addWidget(clrBtn);
-    v2->addLayout(h2);
-    snapCheck_ = new QCheckBox(tr("Snap to detected grid corners"));
-    snapCheck_->setChecked(true);
-    v2->addWidget(snapCheck_);
-    auto* f2 = new QFormLayout;
-    auto* hr = new QHBoxLayout;
-    rectWSpin_ = spin(0.1, 10000, 100, 2, 1, tr(" mm"));
-    rectHSpin_ = spin(0.1, 10000, 100, 2, 1, tr(" mm"));
-    hr->addWidget(rectWSpin_);
-    hr->addWidget(new QLabel("x"));
-    hr->addWidget(rectHSpin_);
-    f2->addRow(tr("Manual rectangle"), hr);
-    v2->addLayout(f2);
-    auto* hint = new QLabel(tr("Without a detected grid, click 4 corners of a known rectangle in the order "
-                               "top-left, top-right, bottom-right, bottom-left. Any point's mm coordinates can be "
-                               "edited in the table."));
-    hint->setWordWrap(true);
-    hint->setStyleSheet("color: gray;");
-    v2->addWidget(hint);
-    calInfo_ = new QLabel;
-    calInfo_->setWordWrap(true);
-    v2->addWidget(calInfo_);
-    vl->addWidget(g2);
-    connect(addBtn, &QPushButton::clicked, this, [this] {
+    auto* head = new QHBoxLayout;
+    head->setContentsMargins(20, 16, 12, 12);
+    head->addWidget(makeLabel(tr("Adjust"), "title"), 1);
+    auto* close = makeButton(QString(), "icon", Icon::Close, true, theme::muted);
+    close->setToolTip(tr("Close details (Esc)"));
+    head->addWidget(close);
+    v->addLayout(head);
+    connect(close, &QPushButton::clicked, this, [this] { setDetails(false); });
+
+    // Calibration.
+    v->addWidget(makeDivider());
+    QVBoxLayout* b = nullptr;
+    v->addWidget(section(b));
+    {
+        auto* t = new QHBoxLayout;
+        t->addWidget(makeLabel(tr("Calibration"), "h3"), 1);
+        calStatus_ = makeLabel(QString(), "small");
+        calStatus_->setTextFormat(Qt::RichText);
+        t->addWidget(calStatus_);
+        b->addLayout(t);
+        auto* g = new QHBoxLayout;
+        g->setSpacing(10);
+        auto* c1 = new QVBoxLayout;
+        c1->setSpacing(6);
+        c1->addWidget(makeLabel(tr("Pattern"), "small"));
+        patternCombo_ = new QComboBox;
+        patternCombo_->addItems({tr("Line grid"), tr("Checkerboard")});
+        patternCombo_->setToolTip(tr("Line grid: cutting mats, graph paper (light or dark lines)."));
+        c1->addWidget(patternCombo_);
+        auto* c2 = new QVBoxLayout;
+        c2->setSpacing(6);
+        c2->addWidget(makeLabel(tr("Square size"), "small"));
+        squareSpin_ = new QDoubleSpinBox;
+        squareSpin_->setRange(0.1, 1000);
+        squareSpin_->setDecimals(2);
+        squareSpin_->setValue(10);
+        squareSpin_->setSuffix(" mm");
+        squareSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        squareSpin_->setKeyboardTracking(false);
+        c2->addWidget(squareSpin_);
+        g->addLayout(c1, 1);
+        g->addLayout(c2, 1);
+        b->addLayout(g);
+        auto* bb = new QHBoxLayout;
+        bb->setSpacing(8);
+        auto* again = makeButton(tr("Detect again"));
+        editRefsBtn_ = makeButton(tr("Reference points"));
+        editRefsBtn_->setCheckable(true);
+        bb->addWidget(again, 1);
+        bb->addWidget(editRefsBtn_, 1);
+        b->addLayout(bb);
+        refsBox_ = new QWidget;
+        auto* rl = new QVBoxLayout(refsBox_);
+        rl->setContentsMargins(0, 0, 0, 0);
+        rl->setSpacing(8);
+        refTable_ = new QTableWidget(0, 5);
+        refTable_->setHorizontalHeaderLabels({"#", tr("X mm"), tr("Y mm"), tr("err mm"), ""});
+        refTable_->setColumnHidden(4, true);
+        refTable_->verticalHeader()->setVisible(false);
+        refTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        refTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        refTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        refTable_->setMinimumHeight(180);
+        rl->addWidget(refTable_);
+        auto* rb = new QHBoxLayout;
+        auto* add = makeButton(tr("Add"));
+        auto* del = makeButton(tr("Delete"));
+        auto* clr = makeButton(tr("Clear"));
+        rb->addWidget(add);
+        rb->addWidget(del);
+        rb->addWidget(clr);
+        rl->addLayout(rb);
+        snapCheck_ = new QCheckBox(tr("Snap to grid corners"));
+        snapCheck_->setChecked(true);
+        rl->addWidget(snapCheck_);
+        auto* hint = makeLabel(tr("Points are coloured by fit: green < 0.1 mm, orange < 0.3 mm, red worse. Edit the "
+                                  "mm values to use any known marks."),
+                               "faint");
+        hint->setWordWrap(true);
+        rl->addWidget(hint);
+        refsBox_->setVisible(false);
+        b->addWidget(refsBox_);
+
+        connect(again, &QPushButton::clicked, this, &MainWindow::runAutomatic);
+        connect(squareSpin_, &QDoubleSpinBox::valueChanged, this, &MainWindow::applySquareSize);
+        connect(editRefsBtn_, &QPushButton::toggled, this, [this](bool on) {
+            refsBox_->setVisible(on);
+            if (on) setView(Canvas::View::Original);
+        });
+        connect(add, &QPushButton::clicked, this, [this] {
+            setView(Canvas::View::Original);
+            setTool(Canvas::Tool::AddRef);
+        });
+        connect(del, &QPushButton::clicked, this, [this] {
+            std::vector<int> rows;
+            for (const auto& r : refTable_->selectionModel()->selectedRows()) rows.push_back(r.row());
+            if (rows.empty() && canvas_->selectedRef() >= 0) rows.push_back(canvas_->selectedRef());
+            if (rows.empty()) return;
+            pushUndo();
+            std::sort(rows.rbegin(), rows.rend());
+            for (int r : rows)
+                if (r < int(doc_.refs.size())) doc_.refs.erase(doc_.refs.begin() + r);
+            canvas_->setSelectedRef(-1);
+            recalibrate(true);
+        });
+        connect(clr, &QPushButton::clicked, this, [this] {
+            pushUndo();
+            doc_.refs.clear();
+            recalibrate(true);
+        });
+        connect(snapCheck_, &QCheckBox::toggled, canvas_, &Canvas::setSnap);
+        connect(refTable_, &QTableWidget::cellChanged, this, &MainWindow::onRefTableEdited);
+        connect(refTable_, &QTableWidget::itemSelectionChanged, this, [this] {
+            const auto rows = refTable_->selectionModel()->selectedRows();
+            canvas_->setSelectedRef(rows.size() == 1 ? rows.front().row() : -1);
+        });
+    }
+
+    // Wire detection.
+    v->addWidget(makeDivider());
+    v->addWidget(section(b));
+    {
+        b->addWidget(makeLabel(tr("Wire detection"), "h3"));
+        methodSeg_ = new Segmented({tr("Automatic"), tr("By colour")});
+        b->addWidget(methodSeg_);
+        b->addWidget(sliderRow(tr("Sensitivity"), sensSlider_, sensValue_, 0, 100, 50));
+        sensSlider_->setToolTip(tr("Middle = automatic. Right finds fainter wires, left ignores more clutter."));
+        colorRow_ = new QWidget;
+        auto* cr = new QHBoxLayout(colorRow_);
+        cr->setContentsMargins(0, 0, 0, 0);
+        cr->setSpacing(8);
+        cr->addWidget(makeLabel(tr("Colour"), "small"));
+        colorBtn_ = new QPushButton;
+        colorBtn_->setFixedSize(44, 30);
+        colorBtn_->setCursor(Qt::PointingHandCursor);
+        cr->addWidget(colorBtn_);
+        cr->addStretch(1);
+        cr->addWidget(makeLabel(tr("Tolerance"), "small"));
+        colorTolSpin_ = new QDoubleSpinBox;
+        colorTolSpin_->setRange(1, 255);
+        colorTolSpin_->setDecimals(0);
+        colorTolSpin_->setValue(60);
+        colorTolSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        colorTolSpin_->setFixedWidth(64);
+        cr->addWidget(colorTolSpin_);
+        colorRow_->setVisible(false);
+        b->addWidget(colorRow_);
+        b->addWidget(sliderRow(tr("Smoothing"), smoothSlider_, smoothValue_, 0, 100, 30));
+        auto* mr = new QHBoxLayout;
+        mr->addWidget(makeLabel(tr("Search beyond the grid"), "small"), 1);
+        marginSpin_ = new QDoubleSpinBox;
+        marginSpin_->setRange(0, 1000);
+        marginSpin_->setDecimals(1);
+        marginSpin_->setValue(2.5);
+        marginSpin_->setSuffix(" mm");
+        marginSpin_->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        marginSpin_->setKeyboardTracking(false);
+        marginSpin_->setFixedWidth(90);
+        mr->addWidget(marginSpin_);
+        b->addLayout(mr);
+        outlineCheck_ = new QCheckBox(tr("Trace the outline instead of the centre line"));
+        outlineCheck_->setProperty("role", "small");
+        b->addWidget(outlineCheck_);
+        auto* trace = makeButton(tr("Trace again"));
+        b->addWidget(trace);
+
+        connect(methodSeg_, &Segmented::changed, this, [this](int i) {
+            colorRow_->setVisible(i == 1);
+            sensSlider_->parentWidget()->setVisible(i == 0);
+        });
+        connect(sensSlider_, &QSlider::valueChanged, this, [this] { updatePanel(); });
+        connect(smoothSlider_, &QSlider::valueChanged, this, [this] { updatePanel(); });
+        for (QSlider* s : {sensSlider_, smoothSlider_})
+            connect(s, &QSlider::sliderReleased, this, [this] { detectProfile(false, {}); });
+        connect(colorBtn_, &QPushButton::clicked, this, [this] {
+            const QColor c = QColorDialog::getColor(pickedColor_, this, tr("Wire colour"));
+            if (!c.isValid()) return;
+            pickedColor_ = c;
+            methodSeg_->setIndex(1);
+            colorRow_->setVisible(true);
+            updatePanel();
+            detectProfile(false, {});
+        });
+        connect(marginSpin_, &QDoubleSpinBox::valueChanged, this, [this] {
+            updateDetectRoi();
+            rectTimer_.start();
+            canvas_->update();
+        });
+        connect(trace, &QPushButton::clicked, this, [this] { detectProfile(false, {}); });
+    }
+
+    // Lines & arcs.
+    v->addWidget(makeDivider());
+    v->addWidget(section(b));
+    {
+        auto* t = new QHBoxLayout;
+        t->addWidget(makeLabel(tr("Lines & arcs"), "h3"), 1);
+        fitCheck_ = new QCheckBox(tr("Fit automatically"));
+        fitCheck_->setProperty("role", "small");
+        fitCheck_->setChecked(true);
+        fitCheck_->setLayoutDirection(Qt::RightToLeft);
+        t->addWidget(fitCheck_);
+        b->addLayout(t);
+        b->addWidget(sliderRow(tr("Tolerance"), tolSlider_, tolValue_, 0, 100, sliderFromTol(0.10)));
+        tolSlider_->setToolTip(tr("Largest allowed deviation from the traced points. Higher = fewer, cleaner "
+                                  "segments."));
+        auto* r = new QHBoxLayout;
+        r->addWidget(makeLabel(tr("Result"), "muted"), 1);
+        fitSummaryBtn_ = makeButton(QString(), "link");
+        r->addWidget(fitSummaryBtn_);
+        b->addLayout(r);
+        connect(fitCheck_, &QCheckBox::toggled, this, [this](bool on) {
+            doc_.fitEnabled = on;
+            refit();
+        });
+        connect(tolSlider_, &QSlider::valueChanged, this, [this](int val) {
+            doc_.fitTol = tolFromSlider(val);
+            if (tolSlider2_->value() != val) tolSlider2_->setValue(val);
+            refit();
+        });
+        connect(fitSummaryBtn_, &QPushButton::clicked, this, [this] { showArcsPage(true); });
+    }
+    v->addWidget(makeDivider());
+    v->addStretch(1);
+    panelStack_->addWidget(page);
+    panelStack_->addWidget(buildArcsPage());
+    panelScroll_->setVisible(false);
+    return panelScroll_;
+}
+
+QWidget* MainWindow::buildArcsPage() {
+    auto* page = new QWidget;
+    page->setObjectName("PanelPage");
+    auto* v = new QVBoxLayout(page);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(0);
+    auto* head = new QHBoxLayout;
+    head->setContentsMargins(12, 16, 12, 4);
+    head->setSpacing(6);
+    auto* back = makeButton(QString(), "icon", Icon::ChevronLeft, true, theme::muted);
+    back->setToolTip(tr("Back to Adjust"));
+    head->addWidget(back);
+    head->addWidget(makeLabel(tr("Lines & arcs"), "title"), 1);
+    v->addLayout(head);
+    connect(back, &QPushButton::clicked, this, [this] { showArcsPage(false); });
+    auto* d = makeLabel(tr("Traced or clicked points are rebuilt as the fewest lines and arcs that stay within "
+                           "tolerance — ready for CAD."),
+                        "muted");
+    d->setWordWrap(true);
+    d->setContentsMargins(20, 0, 20, 12);
+    v->addWidget(d);
+    QVBoxLayout* b = nullptr;
+    auto* top = section(b);
+    b->setContentsMargins(20, 0, 20, 16);
+    b->addWidget(sliderRow(tr("Tolerance"), tolSlider2_, tolValue2_, 0, 100, sliderFromTol(0.10)));
+    showPointsCheck_ = new QCheckBox(tr("Show the source points"));
+    b->addWidget(showPointsCheck_);
+    v->addWidget(top);
+    v->addWidget(makeDivider());
+    segList_ = new QListWidget;
+    segList_->setStyleSheet("QListWidget { border: none; background: #16181C; padding: 8px; }"
+                            "QListWidget::item { min-height: 44px; }");
+    segList_->setSpacing(2);
+    v->addWidget(segList_, 1);
+    connect(tolSlider2_, &QSlider::valueChanged, this, [this](int val) {
+        if (tolSlider_->value() != val) tolSlider_->setValue(val);
+    });
+    connect(showPointsCheck_, &QCheckBox::toggled, canvas_, &Canvas::setShowPoints);
+    connect(segList_, &QListWidget::currentRowChanged, this, [this](int row) {
+        doc_.selectedSeg = row;
+        canvas_->update();
+    });
+    return page;
+}
+
+void MainWindow::buildActions() {
+    auto add = [this](const QKeySequence& k, std::function<void()> fn) {
+        auto* a = new QAction(this);
+        a->setShortcut(k);
+        a->setShortcutContext(Qt::WindowShortcut);
+        connect(a, &QAction::triggered, this, fn);
+        addAction(a);
+    };
+    add(QKeySequence::Open, [this] { openImage(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_E), [this] { exportDialog(0); });
+    add(QKeySequence::Undo, [this] { undo(); });
+    add(QKeySequence::Redo, [this] { redo(); });
+    add(QKeySequence(Qt::CTRL | Qt::Key_Y), [this] { redo(); });
+    add(QKeySequence(Qt::Key_F5), [this] { runAutomatic(); });
+    add(QKeySequence(Qt::Key_1), [this] { setView(Canvas::View::Original); });
+    add(QKeySequence(Qt::Key_2), [this] { setView(Canvas::View::Rectified); });
+    add(QKeySequence(Qt::Key_F), [this] { canvas_->fitToWindow(); });
+    const Qt::Key keys[5] = {Qt::Key_E, Qt::Key_R, Qt::Key_D, Qt::Key_O, Qt::Key_C};
+    for (int i = 0; i < 5; ++i)
+        add(QKeySequence(keys[i]), [this, i] {
+            if (!doc_.hasImage()) return;
+            setDetails(true);
+            setTool(Canvas::Tool(i));
+        });
+}
+
+bool MainWindow::eventFilter(QObject* o, QEvent* e) {
+    if (o == stage_ && (e->type() == QEvent::Resize || e->type() == QEvent::Show)) layoutOverlays();
+    return QMainWindow::eventFilter(o, e);
+}
+
+void MainWindow::layoutOverlays() {
+    if (!stage_) return;
+    const int W = stage_->width(), H = stage_->height();
+    viewSeg_->adjustSize();
+    viewSeg_->move(20, 20);
+    zoomBox_->adjustSize();
+    zoomBox_->move(W - zoomBox_->width() - 20, 20);
+    const int cw = std::min(780, W - 40);
+    resultCard_->setFixedWidth(cw);
+    resultCard_->adjustSize();
+    resultCard_->move((W - cw) / 2, H - resultCard_->height() - 24);
+    calibCard_->adjustSize();
+    calibCard_->move(24, 24);
+    hint_->adjustSize();
+    hint_->move(20, H - hint_->height() - 20);
+    if (dim_ && centralWidget()) dim_->setGeometry(centralWidget()->rect());
+}
+
+// ---------------------------------------------------------------------------
+// Tiers and modes
+// ---------------------------------------------------------------------------
+void MainWindow::setDetails(bool on) {
+    if (!doc_.hasImage()) on = false;
+    details_ = on;
+    rail_->setVisible(on);
+    panelScroll_->setVisible(on);
+    canvas_->setDetails(on);
+    if (!on) {
+        showArcsPage(false);
+        setTool(Canvas::Tool::Select);
+    }
+    updateAll();
+}
+
+void MainWindow::showArcsPage(bool on) {
+    panelStack_->setCurrentIndex(on ? 1 : 0);
+    doc_.showSegColors = on;
+    if (!on) {
+        doc_.selectedSeg = -1;
+        segList_->clearSelection();
+    }
+    canvas_->update();
+}
+
+void MainWindow::setCalibrating(bool on) {
+    calibrating_ = on;
+    if (on) {
+        calibCard_->setSquare(doc_.squareMM);
         setView(Canvas::View::Original);
-        setTool(Canvas::Tool::AddRef);
-    });
-    connect(delBtn, &QPushButton::clicked, this, [this] {
-        std::vector<int> rows;
-        for (const auto& r : refTable_->selectionModel()->selectedRows()) rows.push_back(r.row());
-        if (rows.empty() && canvas_->selectedRef() >= 0) rows.push_back(canvas_->selectedRef());
-        if (rows.empty()) return;
-        pushUndo();
-        std::sort(rows.rbegin(), rows.rend());
-        for (int r : rows)
-            if (r < int(doc_.refs.size())) doc_.refs.erase(doc_.refs.begin() + r);
-        canvas_->setSelectedRef(-1);
-        recalibrate(true);
-    });
-    connect(clrBtn, &QPushButton::clicked, this, [this] {
-        pushUndo();
-        doc_.refs.clear();
-        recalibrate(true);
-    });
-    connect(snapCheck_, &QCheckBox::toggled, canvas_, &Canvas::setSnap);
-    connect(refTable_, &QTableWidget::cellChanged, this, &MainWindow::onRefTableEdited);
-    connect(refTable_, &QTableWidget::itemSelectionChanged, this, [this] {
-        const auto rows = refTable_->selectionModel()->selectedRows();
-        canvas_->setSelectedRef(rows.size() == 1 ? rows.front().row() : -1);
-    });
-
-    // 3. Profile.
-    auto* g3 = new QGroupBox(tr("3  Profile detection"));
-    auto* f3 = new QFormLayout(g3);
-    modeCombo_ = new QComboBox;
-    modeCombo_->addItems({tr("Auto (differs from pattern)"), tr("By colour")});
-    f3->addRow(tr("Method"), modeCombo_);
-    outputCombo_ = new QComboBox;
-    outputCombo_->addItems({tr("Centre line (wire)"), tr("Outline (closed)")});
-    f3->addRow(tr("Result"), outputCombo_);
-    thrSpin_ = spin(0, 255, 0, 1, 2);
-    thrSpin_->setSpecialValueText(tr("auto"));
-    thrSpin_->setToolTip(tr("Detection threshold (0 = automatic). Lower finds fainter objects."));
-    f3->addRow(tr("Threshold"), thrSpin_);
-    auto* hc = new QHBoxLayout;
-    colorBtn_ = new QPushButton;
-    colorBtn_->setFixedWidth(48);
-    colorBtn_->setStyleSheet(QString("background:%1").arg(pickedColor_.name()));
-    colorTolSpin_ = spin(1, 255, 60, 0, 5);
-    hc->addWidget(colorBtn_);
-    hc->addWidget(new QLabel(tr("tolerance")));
-    hc->addWidget(colorTolSpin_);
-    f3->addRow(tr("Colour"), hc);
-    marginSpin_ = spin(0, 1000, 2.5, 1, 0.5, tr(" mm"));
-    marginSpin_->setToolTip(tr("How far beyond the reference points the profile is searched"));
-    f3->addRow(tr("Search margin"), marginSpin_);
-    smoothSpin_ = spin(0, 10, 0.3, 2, 0.05, tr(" mm"));
-    f3->addRow(tr("Smoothing"), smoothSpin_);
-    simplifySpin_ = spin(0, 10, 0.05, 3, 0.01, tr(" mm"));
-    simplifySpin_->setToolTip(tr("Maximum deviation when reducing the number of vertices"));
-    f3->addRow(tr("Simplify tolerance"), simplifySpin_);
-    auto* detP = new QPushButton(tr("Detect profile"));
-    f3->addRow(detP);
-    auto* h3 = new QHBoxLayout;
-    auto* simpBtn = new QPushButton(tr("Simplify"));
-    auto* revBtn = new QPushButton(tr("Reverse"));
-    auto* clrP = new QPushButton(tr("Clear"));
-    h3->addWidget(simpBtn);
-    h3->addWidget(revBtn);
-    h3->addWidget(clrP);
-    f3->addRow(h3);
-    closedCheck_ = new QCheckBox(tr("Closed contour"));
-    f3->addRow(closedCheck_);
-    profileInfo_ = new QLabel;
-    profileInfo_->setWordWrap(true);
-    f3->addRow(profileInfo_);
-    vl->addWidget(g3);
-    connect(detP, &QPushButton::clicked, this, [this] { detectProfile(false, {}); });
-    connect(simpBtn, &QPushButton::clicked, this, &MainWindow::simplifyProfile);
-    connect(revBtn, &QPushButton::clicked, this, &MainWindow::reverseProfile);
-    connect(clrP, &QPushButton::clicked, this, &MainWindow::clearProfile);
-    connect(closedCheck_, &QCheckBox::toggled, this, [this](bool on) {
-        if (on == doc_.closed) return;
-        pushUndo();
-        doc_.closed = on;
-        canvas_->update();
-        updateInfo();
-    });
-    connect(colorBtn_, &QPushButton::clicked, this, [this] {
-        const QColor c = QColorDialog::getColor(pickedColor_, this, tr("Object colour"));
-        if (!c.isValid()) return;
-        pickedColor_ = c;
-        colorBtn_->setStyleSheet(QString("background:%1").arg(c.name()));
-        modeCombo_->setCurrentIndex(1);
-    });
-    connect(marginSpin_, &QDoubleSpinBox::valueChanged, this, [this] {
-        updateDetectRoi();
-        rectTimer_.start();
-        canvas_->update();
-    });
-
-    // 4. Export.
-    auto* g4 = new QGroupBox(tr("4  Export"));
-    auto* f4 = new QFormLayout(g4);
-    originCombo_ = new QComboBox;
-    originCombo_->addItems({tr("Profile corner (bottom-left = 0,0)"), tr("Grid origin")});
-    f4->addRow(tr("Origin"), originCombo_);
-    expSmoothCheck_ = new QCheckBox(tr("Smooth curve (spline densification)"));
-    f4->addRow(expSmoothCheck_);
-    expGridCheck_ = new QCheckBox(tr("Include reference grid layer"));
-    f4->addRow(expGridCheck_);
-    auto* h4 = new QHBoxLayout;
-    auto* bDxf = new QPushButton(tr("DXF"));
-    auto* bSvg = new QPushButton(tr("SVG"));
-    auto* bCsv = new QPushButton(tr("CSV"));
-    auto* bImg = new QPushButton(tr("Rectified PNG"));
-    for (auto* b : {bDxf, bSvg, bCsv, bImg}) h4->addWidget(b);
-    f4->addRow(h4);
-    vl->addWidget(g4);
-    connect(bDxf, &QPushButton::clicked, this, [this] { exportProfile(0); });
-    connect(bSvg, &QPushButton::clicked, this, [this] { exportProfile(1); });
-    connect(bCsv, &QPushButton::clicked, this, [this] { exportProfile(2); });
-    connect(bImg, &QPushButton::clicked, this, &MainWindow::saveRectified);
-
-    vl->addStretch(1);
-    return panel;
+        canvas_->setTool(Canvas::Tool::AddRef);
+    } else if (canvas_->tool() == Canvas::Tool::AddRef) {
+        setTool(Canvas::Tool::Select);
+    }
+    updateAll();
 }
 
 void MainWindow::setTool(Canvas::Tool t) {
+    if (t == Canvas::Tool::AddRef) setView(Canvas::View::Original);
     canvas_->setTool(t);
-    toolActs_[int(t)]->setChecked(true);
+    for (int i = 0; i < 5; ++i)
+        if (toolBtns_[i]) toolBtns_[i]->setChecked(i == int(t));
+    updateAll();
 }
 
 void MainWindow::setView(Canvas::View v) {
     canvas_->setView(v);
-    (v == Canvas::View::Original ? viewOrigAct_ : viewRectAct_)->setChecked(true);
+    viewSeg_->setIndex(v == Canvas::View::Original ? 0 : 1);
 }
 
-void MainWindow::status(const QString& msg) { statusBar()->showMessage(msg, 8000); }
+void MainWindow::status(const QString& msg) {
+    lastMessage_ = msg;
+    updateAll();
+}
 
 // ---------------------------------------------------------------------------
 // Loading and the automatic pipeline
@@ -481,9 +737,27 @@ void MainWindow::openImage() {
     if (!fn.isEmpty()) loadImage(fn);
 }
 
+void MainWindow::openSample() {
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    const QString fn = QDir(dir).filePath("contour_profiler_sample.png");
+    cp::SynthParams sp;
+    sp.squareMM = doc_.squareMM;
+    if (toQImage(cp::renderSynthetic(sp).img).save(fn)) loadImage(fn);
+}
+
+void MainWindow::changeSquareSize() {
+    bool ok = false;
+    const double v = QInputDialog::getDouble(this, tr("Grid squares"), tr("Size of one grid square (mm):"),
+                                             doc_.squareMM, 0.1, 1000, 2, &ok);
+    if (!ok) return;
+    squareSpin_->setValue(v);
+    doc_.squareMM = v;
+    start_->setSquare(v);
+}
+
 bool MainWindow::loadImage(const QString& path) {
     QImageReader reader(path);
-    reader.setAutoTransform(true);  // honour EXIF orientation
+    reader.setAutoTransform(true);
     QImage img = reader.read();
     if (img.isNull()) {
         QMessageBox::warning(this, tr("Open photo"), tr("Cannot read %1:\n%2").arg(path, reader.errorString()));
@@ -491,50 +765,65 @@ bool MainWindow::loadImage(const QString& path) {
     }
     QApplication::setOverrideCursor(Qt::WaitCursor);
     const double square = doc_.squareMM;
+    const bool fitOn = doc_.fitEnabled;
+    const double tol = doc_.fitTol;
     doc_ = Document();
     doc_.squareMM = square;
+    doc_.fitEnabled = fitOn;
+    doc_.fitTol = tol;
     doc_.path = path;
     doc_.image = img.convertToFormat(QImage::Format_RGB888);
     doc_.core = fromQImage(doc_.image);
     doc_.gray = cp::toGray(doc_.core);
     undo_.clear();
     redo_.clear();
+    lastAutoThr_ = 0;
+    gridDetected_ = false;
+    lastMessage_.clear();
+    pages_->setCurrentIndex(1);
     canvas_->imageChanged();
     setView(Canvas::View::Original);
     setWindowTitle(tr("Contour Profiler - %1").arg(QFileInfo(path).fileName()));
-    gridInfo_->setText(tr("%1 x %2 px").arg(img.width()).arg(img.height()));
     QApplication::restoreOverrideCursor();
     updateRefTable();
-    updateInfo();
-    if (autoCheck_->isChecked()) runAutomatic();
+    runAutomatic();
     return true;
 }
 
 void MainWindow::runAutomatic() {
     if (!doc_.hasImage()) return;
-    detectGrid();
-    if (!doc_.cal.ok) return;
+    if (!detectGrid()) {
+        setCalibrating(true);
+        return;
+    }
+    setCalibrating(false);
     rebuildRectified();
     detectProfile(false, {});
     setView(Canvas::View::Rectified);
 }
 
-void MainWindow::detectGrid() {
-    if (!doc_.hasImage()) return;
+bool MainWindow::detectGrid() {
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const cp::PatternType pt = cp::PatternType(patternCombo_->currentIndex());
-    cp::GridResult g = cp::detectGrid(doc_.gray, pt);
+    const cp::GridResult g = cp::detectGrid(doc_.gray, cp::PatternType(patternCombo_->currentIndex()));
     QApplication::restoreOverrideCursor();
     doc_.grid = g;
     if (!g.ok) {
-        gridInfo_->setText(QString::fromStdString(g.message));
-        status(QString::fromStdString(g.message));
-        canvas_->update();
-        return;
+        // Try the other pattern type before giving up.
+        const int other = 1 - patternCombo_->currentIndex();
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        const cp::GridResult g2 = cp::detectGrid(doc_.gray, cp::PatternType(other));
+        QApplication::restoreOverrideCursor();
+        if (!g2.ok) {
+            gridDetected_ = false;
+            status(QString::fromStdString(g.message));
+            return false;
+        }
+        patternCombo_->setCurrentIndex(other);
+        doc_.grid = g2;
     }
     pushUndo();
     doc_.refs.clear();
-    for (const auto& n : g.nodes) {
+    for (const auto& n : doc_.grid.nodes) {
         RefPoint r;
         r.img = n.img;
         r.world = cp::gridWorld(n, doc_.squareMM);
@@ -543,25 +832,26 @@ void MainWindow::detectGrid() {
         r.gj = n.j;
         doc_.refs.push_back(r);
     }
-    gridInfo_->setText(tr("Detected %1").arg(QString::fromStdString(g.message)));
+    gridDetected_ = true;
     recalibrate(true);
+    return doc_.cal.ok;
 }
 
-void MainWindow::applySquareSize() {
-    const double s = squareSpin_->value();
+void MainWindow::applySquareSize(double s) {
     const double old = doc_.squareMM;
     doc_.squareMM = s;
-    if (doc_.refs.empty() || old <= 0) return;
+    start_->setSquare(s);
+    if (doc_.refs.empty() || old <= 0 || std::fabs(s - old) < 1e-12) return;
     pushUndo();
     bool allGrid = true;
     for (auto& r : doc_.refs) {
         if (r.fromGrid) r.world = cp::Pt(r.gi * s, r.gj * s);
         else allGrid = false;
     }
-    // A grid-only calibration scales uniformly: keep the profile on the photo.
     if (allGrid)
         for (auto& p : doc_.profile) p = p * (s / old);
     recalibrate(true);
+    refit();
 }
 
 cp::RectD MainWindow::imageFootprint() const {
@@ -588,7 +878,10 @@ void MainWindow::updateDetectRoi() {
 void MainWindow::recalibrate(bool finished) {
     if (doc_.refs.size() >= 4) {
         std::vector<cp::Pt> img, world;
-        for (const auto& r : doc_.refs) { img.push_back(r.img); world.push_back(r.world); }
+        for (const auto& r : doc_.refs) {
+            img.push_back(r.img);
+            world.push_back(r.world);
+        }
         doc_.cal = cp::calibrate(img, world);
         if (doc_.cal.ok)
             for (size_t i = 0; i < doc_.refs.size(); ++i) doc_.refs[i].errMM = doc_.cal.residualsMM[i];
@@ -597,34 +890,41 @@ void MainWindow::recalibrate(bool finished) {
     }
     updateDetectRoi();
     if (finished) updateRefTable();
-    updateInfo();
+    if (calibrating_) calibCard_->setCount(int(doc_.refs.size()));
     canvas_->update();
     rectTimer_.start();
+    updateAll();
 }
 
 void MainWindow::addReference(QPointF imgPt) {
     pushUndo();
     RefPoint r;
     r.img = cp::Pt(imgPt.x(), imgPt.y());
-    if (doc_.cal.ok) {
-        // Suggest coordinates from the current calibration, snapped to the
-        // nearest grid intersection when close.
+    const bool useTemplate = calibrating_ || !doc_.cal.ok;
+    if (!useTemplate) {
         cp::Pt w = doc_.cal.Hi2w.apply(r.img);
         const double s = doc_.squareMM;
         const cp::Pt g(std::round(w.x / s) * s, std::round(w.y / s) * s);
         r.world = cp::dist(g, w) < 0.25 * s ? g : cp::Pt(std::round(w.x * 10) / 10, std::round(w.y * 10) / 10);
-    } else {
-        const double W = rectWSpin_->value(), H = rectHSpin_->value();
+    } else if (doc_.refs.size() < 4) {
+        const double W = calibCard_->rectW(), H = calibCard_->rectH();
         const cp::Pt tmpl[4] = {{0, 0}, {W, 0}, {W, H}, {0, H}};
-        r.world = tmpl[doc_.refs.size() % 4];
+        r.world = tmpl[doc_.refs.size()];
+    } else {
+        // Beyond four: predict from the current calibration (snapped to the grid).
+        cp::Pt w = doc_.cal.ok ? doc_.cal.Hi2w.apply(r.img) : cp::Pt();
+        const double s = doc_.squareMM;
+        r.world = cp::Pt(std::round(w.x / s) * s, std::round(w.y / s) * s);
     }
     doc_.refs.push_back(r);
     recalibrate(true);
-    refTable_->selectRow(int(doc_.refs.size()) - 1);
-    status(tr("Reference point %1 added at %2, %3 mm - edit the table if the coordinates differ.")
-               .arg(doc_.refs.size())
-               .arg(r.world.x)
-               .arg(r.world.y));
+    if (calibrating_ && doc_.refs.size() == 4 && doc_.cal.ok) {
+        // Calibrated by hand: continue the automatic flow.
+        rebuildRectified();
+        detectProfile(false, {});
+        setCalibrating(false);
+        setView(Canvas::View::Rectified);
+    }
 }
 
 void MainWindow::rebuildRectified() {
@@ -650,49 +950,54 @@ void MainWindow::rebuildRectified() {
     canvas_->rectifiedChanged();
 }
 
-// ---------------------------------------------------------------------------
-// Profile
-// ---------------------------------------------------------------------------
+double MainWindow::threshold() const {
+    const int v = sensSlider_->value();
+    if (v == 50) return 0;  // automatic
+    const double base = lastAutoThr_ > 0 ? lastAutoThr_ : 45;
+    return base * std::pow(2.0, (50 - v) / 25.0);
+}
+
 void MainWindow::detectProfile(bool hasSeed, cp::Pt seed) {
     if (!doc_.cal.ok || !doc_.detectRoi.valid()) {
-        status(tr("Calibrate first: detect the grid or add at least 4 reference points."));
+        status(tr("Calibrate first: detect the grid or click 4 corners of a known rectangle."));
         return;
     }
     cp::ProfileParams prm;
-    prm.mode = cp::DetectMode(modeCombo_->currentIndex());
-    prm.output = cp::ProfileOutput(outputCombo_->currentIndex());
+    prm.mode = cp::DetectMode(methodSeg_->index());
+    prm.output = outlineCheck_->isChecked() ? cp::ProfileOutput::Outline : cp::ProfileOutput::Centerline;
     prm.pattern = cp::PatternType(patternCombo_->currentIndex());
     prm.squareMM = doc_.squareMM;
-    prm.threshold = thrSpin_->value();
+    prm.threshold = prm.mode == cp::DetectMode::Color ? 0 : threshold();
     prm.color[0] = uint8_t(pickedColor_.red());
     prm.color[1] = uint8_t(pickedColor_.green());
     prm.color[2] = uint8_t(pickedColor_.blue());
     prm.colorTol = colorTolSpin_->value();
-    prm.smoothMM = smoothSpin_->value();
-    prm.simplifyMM = simplifySpin_->value();
+    prm.smoothMM = smoothSlider_->value() / 100.0;
+    prm.simplifyMM = 0.02;  // dense enough for the line/arc fit
     prm.hasSeed = hasSeed;
     prm.seed = seed;
     cp::RectD roi = doc_.detectRoi;
     if (hasSeed) {
-        // A picked point outside the search region extends the region.
         const double m = doc_.squareMM;
-        roi.x0 = std::min(roi.x0, seed.x - m); roi.y0 = std::min(roi.y0, seed.y - m);
-        roi.x1 = std::max(roi.x1, seed.x + m); roi.y1 = std::max(roi.y1, seed.y + m);
+        roi.x0 = std::min(roi.x0, seed.x - m);
+        roi.y0 = std::min(roi.y0, seed.y - m);
+        roi.x1 = std::max(roi.x1, seed.x + m);
+        roi.y1 = std::max(roi.y1, seed.y + m);
         roi = intersect(roi, imageFootprint());
     }
     const cp::Pt c((roi.x0 + roi.x1) / 2, (roi.y0 + roi.y1) / 2);
     QApplication::setOverrideCursor(Qt::WaitCursor);
     const cp::ProfileResult r = cp::detectProfile(doc_.core, doc_.cal.Hw2i, roi, cp::pxPerMM(doc_.cal.Hw2i, c), prm);
     QApplication::restoreOverrideCursor();
+    if (prm.threshold <= 0 && prm.mode == cp::DetectMode::PatternSubtraction) lastAutoThr_ = r.thresholdUsed;
 
-    // Diagnostics overlay: red = above threshold, green = selected object.
     if (!r.mask.empty()) {
         QImage m(r.maskW, r.maskH, QImage::Format_ARGB32);
         for (int y = 0; y < r.maskH; ++y) {
             auto* line = reinterpret_cast<QRgb*>(m.scanLine(y));
             for (int x = 0; x < r.maskW; ++x) {
                 const uint8_t v = r.mask[size_t(y) * r.maskW + x];
-                line[x] = v == 2 ? qRgba(0, 255, 80, 80) : v == 1 ? qRgba(255, 40, 40, 90) : qRgba(0, 0, 0, 0);
+                line[x] = v == 2 ? qRgba(70, 195, 138, 80) : v == 1 ? qRgba(255, 80, 60, 90) : qRgba(0, 0, 0, 0);
             }
         }
         doc_.maskImage = m;
@@ -702,13 +1007,11 @@ void MainWindow::detectProfile(bool hasSeed, cp::Pt seed) {
         pushUndo();
         doc_.profile = r.pts;
         doc_.closed = r.closed;
-        closedCheck_->blockSignals(true);
-        closedCheck_->setChecked(r.closed);
-        closedCheck_->blockSignals(false);
+        lastMessage_.clear();
+    } else {
+        lastMessage_ = QString::fromStdString(r.message);
     }
-    status(QString::fromStdString(r.message));
-    updateInfo();
-    canvas_->update();
+    refit();
 }
 
 void MainWindow::pickColor(QPointF imgPt) {
@@ -725,60 +1028,106 @@ void MainWindow::pickColor(QPointF imgPt) {
         }
     if (!n) return;
     pickedColor_ = QColor(int(s[0] / n), int(s[1] / n), int(s[2] / n));
-    colorBtn_->setStyleSheet(QString("background:%1").arg(pickedColor_.name()));
-    modeCombo_->setCurrentIndex(1);
-    if (doc_.cal.ok) {
-        const cp::Pt w = doc_.cal.Hi2w.apply(cp::Pt(imgPt.x(), imgPt.y()));
-        detectProfile(true, w);
+    methodSeg_->setIndex(1);
+    colorRow_->setVisible(true);
+    sensSlider_->parentWidget()->setVisible(false);
+    if (doc_.cal.ok) detectProfile(true, doc_.cal.Hi2w.apply(cp::Pt(imgPt.x(), imgPt.y())));
+}
+
+void MainWindow::refit() {
+    doc_.segs.clear();
+    if (doc_.fitEnabled && doc_.profile.size() >= 2) {
+        cp::FitOptions o;
+        o.tol = doc_.fitTol;
+        doc_.segs = cp::fitLinesArcs(doc_.profile, doc_.closed, o);
     }
-}
-
-void MainWindow::simplifyProfile() {
-    if (doc_.profile.size() < 3) return;
-    pushUndo();
-    doc_.profile = cp::simplifyDP(doc_.profile, std::max(1e-3, simplifySpin_->value()), doc_.closed);
-    updateInfo();
+    if (doc_.selectedSeg >= int(doc_.segs.size())) doc_.selectedSeg = -1;
+    updateSegList();
     canvas_->update();
-}
-
-void MainWindow::reverseProfile() {
-    if (doc_.profile.size() < 2) return;
-    pushUndo();
-    std::reverse(doc_.profile.begin(), doc_.profile.end());
-    canvas_->update();
-}
-
-void MainWindow::clearProfile() {
-    pushUndo();
-    doc_.profile.clear();
-    doc_.maskImage = QImage();
-    updateInfo();
-    canvas_->update();
+    updateAll();
 }
 
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
-std::vector<cp::ExportPolyline> MainWindow::exportPolylines() const {
-    std::vector<cp::ExportPolyline> out;
-    std::vector<cp::Pt> pts = doc_.profile;
-    if (expSmoothCheck_->isChecked() && pts.size() >= 3) pts = cp::catmullRom(pts, 8, doc_.closed);
-    // CAD convention: Y up.
+void MainWindow::exportDialog(int format) {
+    if (doc_.profile.size() < 2) {
+        QMessageBox::information(this, tr("Export"), tr("There is no profile to export yet."));
+        return;
+    }
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    const auto pts = doc_.segs.empty() ? doc_.profile : cp::sampleSegments(doc_.segs, 0.05);
+    for (const auto& p : pts) {
+        x0 = std::min(x0, p.x); y0 = std::min(y0, p.y);
+        x1 = std::max(x1, p.x); y1 = std::max(y1, p.y);
+    }
+    int na = 0, nl = 0;
+    double len = 0;
+    for (const auto& s : doc_.segs) {
+        (s.arc ? na : nl)++;
+        len += s.length();
+    }
+    if (doc_.segs.empty()) len = cp::polylineLength(doc_.profile, doc_.closed);
+    const QString geo = doc_.segs.empty() ? tr("%1 points").arg(doc_.profile.size())
+                                          : geometrySummary(na, nl, " · ");
+    ExportDialog dlg(this, doc_.profile, doc_.segs, doc_.closed,
+                     QString("%1 × %2 mm").arg(x1 - x0, 0, 'f', 1).arg(y1 - y0, 0, 'f', 1),
+                     QString("%1 mm").arg(len, 0, 'f', 1), geo, format);
+    dim_->setGeometry(centralWidget()->rect());
+    dim_->raise();
+    dim_->show();
+    dlg.adjustSize();
+    dlg.move(mapToGlobal(QPoint((width() - dlg.width()) / 2, std::max(60, (height() - dlg.height()) / 2 - 40))));
+    const int res = dlg.exec();
+    dim_->hide();
+    if (res == QDialog::Accepted) exportFile(dlg.format(), dlg.linesAndArcs(), dlg.origin(), dlg.gridLayer());
+}
+
+void MainWindow::exportFile(int kind, bool arcs, int origin, bool grid) {
+    static const char* ext[3] = {"dxf", "svg", "csv"};
+    static const char* filter[3] = {"DXF drawing (*.dxf)", "SVG drawing (*.svg)", "CSV points (*.csv)"};
+    lastFormat_ = kind;
+    const QFileInfo fi(doc_.path);
+    const QString def = fi.absolutePath() + "/" + fi.completeBaseName() + "_profile." + ext[kind];
+    const QString fn = QFileDialog::getSaveFileName(this, tr("Export profile"), def, tr(filter[kind]));
+    if (fn.isEmpty()) return;
+
+    // Geometry in world mm (Y down), then CAD convention (Y up) with the origin.
+    std::vector<cp::Pt> pts;
+    std::vector<double> bulge;
+    const bool useArcs = arcs && !doc_.segs.empty() && kind != 2;
+    if (useArcs) {
+        for (const auto& s : doc_.segs) {
+            pts.push_back(s.a);
+            bulge.push_back(-s.bulge());  // the Y flip reverses the turning direction
+        }
+        if (!doc_.closed) pts.push_back(doc_.segs.back().b);
+    } else if (!doc_.segs.empty() && kind == 2 && arcs) {
+        pts = cp::sampleSegments(doc_.segs, 0.05);
+    } else {
+        pts = doc_.profile;
+    }
     double ox = 0, oy = 0;
-    if (originCombo_->currentIndex() == 0 && !pts.empty()) {
+    if (origin == 0) {
+        const auto ext2 = doc_.segs.empty() ? pts : cp::sampleSegments(doc_.segs, 0.02);
         double minx = 1e300, maxy = -1e300;
-        for (const auto& p : pts) { minx = std::min(minx, p.x); maxy = std::max(maxy, p.y); }
+        for (const auto& p : ext2) {
+            minx = std::min(minx, p.x);
+            maxy = std::max(maxy, p.y);
+        }
         ox = minx;
         oy = maxy;
     }
     auto tf = [&](cp::Pt p) { return cp::Pt(p.x - ox, oy - p.y); };
+    std::vector<cp::ExportPolyline> polys;
     cp::ExportPolyline prof;
     for (const auto& p : pts) prof.pts.push_back(tf(p));
+    prof.bulge = bulge;
     prof.closed = doc_.closed;
     prof.layer = "PROFILE";
     prof.color = 1;
-    out.push_back(prof);
-    if (expGridCheck_->isChecked() && doc_.detectRoi.valid()) {
+    polys.push_back(prof);
+    if (grid && doc_.detectRoi.valid()) {
         const double s = doc_.squareMM;
         const cp::RectD& r = doc_.detectRoi;
         const int i0 = int(std::ceil(r.x0 / s)), i1 = int(std::floor(r.x1 / s));
@@ -788,60 +1137,43 @@ std::vector<cp::ExportPolyline> MainWindow::exportPolylines() const {
             l.pts = {tf(cp::Pt(i * s, j0 * s)), tf(cp::Pt(i * s, j1 * s))};
             l.layer = "GRID";
             l.color = 8;
-            out.push_back(l);
+            polys.push_back(l);
         }
         for (int j = j0; j <= j1 && j1 - j0 < 500; ++j) {
             cp::ExportPolyline l;
             l.pts = {tf(cp::Pt(i0 * s, j * s)), tf(cp::Pt(i1 * s, j * s))};
             l.layer = "GRID";
             l.color = 8;
-            out.push_back(l);
+            polys.push_back(l);
         }
     }
-    return out;
-}
-
-void MainWindow::exportProfile(int kind) {
-    if (doc_.profile.size() < 2) {
-        QMessageBox::information(this, tr("Export"), tr("There is no profile to export yet."));
-        return;
-    }
-    static const char* ext[3] = {"dxf", "svg", "csv"};
-    static const char* filter[3] = {"DXF drawing (*.dxf)", "SVG drawing (*.svg)", "CSV points (*.csv)"};
-    const QFileInfo fi(doc_.path);
-    const QString def = fi.absolutePath() + "/" + fi.completeBaseName() + "_profile." + ext[kind];
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Export profile"), def, tr(filter[kind]));
-    if (fn.isEmpty()) return;
-    const auto polys = exportPolylines();
     const std::string content = kind == 0 ? cp::makeDXF(polys) : kind == 1 ? cp::makeSVG(polys) : cp::makeCSV(polys);
     QFile f(fn);
     if (!f.open(QIODevice::WriteOnly) || f.write(content.data(), qint64(content.size())) != qint64(content.size())) {
         QMessageBox::warning(this, tr("Export"), tr("Cannot write %1").arg(fn));
         return;
     }
-    status(tr("Exported %1 (units: mm)").arg(fn));
+    status(tr("Saved %1").arg(QFileInfo(fn).fileName()));
 }
 
 void MainWindow::saveRectified() {
     if (doc_.rectified.isNull()) {
-        QMessageBox::information(this, tr("Save rectified image"), tr("No rectified image yet (calibrate first)."));
+        QMessageBox::information(this, tr("Save top-view image"), tr("No top view yet — calibrate first."));
         return;
     }
     const QFileInfo fi(doc_.path);
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Save rectified image"),
-                                                    fi.absolutePath() + "/" + fi.completeBaseName() + "_rectified.png",
+    const QString fn = QFileDialog::getSaveFileName(this, tr("Save top-view image"),
+                                                    fi.absolutePath() + "/" + fi.completeBaseName() + "_topview.png",
                                                     tr("PNG image (*.png)"));
     if (fn.isEmpty()) return;
     QImage img = doc_.rectified;
-    // Embed the true scale so other programs import it at 1:1.
     img.setDotsPerMeterX(int(std::lround(doc_.rectRes * 1000)));
     img.setDotsPerMeterY(int(std::lround(doc_.rectRes * 1000)));
-    if (img.save(fn)) status(tr("Saved %1 (%2 px/mm)").arg(fn).arg(doc_.rectRes, 0, 'f', 2));
-    else QMessageBox::warning(this, tr("Save rectified image"), tr("Cannot write %1").arg(fn));
+    if (!img.save(fn)) QMessageBox::warning(this, tr("Save top-view image"), tr("Cannot write %1").arg(fn));
 }
 
 // ---------------------------------------------------------------------------
-// Tables / info
+// State -> widgets
 // ---------------------------------------------------------------------------
 void MainWindow::updateRefTable() {
     updatingTable_ = true;
@@ -856,60 +1188,144 @@ void MainWindow::updateRefTable() {
             refTable_->setItem(i, col, it);
         };
         put(0, QString::number(i + 1), false);
-        put(1, QString::number(r.img.x, 'f', 1), false);
-        put(2, QString::number(r.img.y, 'f', 1), false);
-        put(3, QString::number(r.world.x, 'f', 2), true);
-        put(4, QString::number(r.world.y, 'f', 2), true);
-        put(5, doc_.cal.ok ? QString::number(r.errMM, 'f', 3) : QString("-"), false);
+        put(1, QString::number(r.world.x, 'f', 2), true);
+        put(2, QString::number(r.world.y, 'f', 2), true);
+        put(3, doc_.cal.ok ? QString::number(r.errMM, 'f', 3) : QString("-"), false);
     }
     updatingTable_ = false;
 }
 
 void MainWindow::onRefTableEdited(int row, int col) {
-    if (updatingTable_ || row < 0 || row >= int(doc_.refs.size()) || (col != 3 && col != 4)) return;
+    if (updatingTable_ || row < 0 || row >= int(doc_.refs.size()) || (col != 1 && col != 2)) return;
     bool ok = false;
     QString txt = refTable_->item(row, col)->text().trimmed();
     txt.replace(',', '.');
     const double v = txt.toDouble(&ok);
-    if (!ok) { updateRefTable(); return; }
+    if (!ok) {
+        updateRefTable();
+        return;
+    }
     pushUndo();
     RefPoint& r = doc_.refs[size_t(row)];
-    (col == 3 ? r.world.x : r.world.y) = v;
+    (col == 1 ? r.world.x : r.world.y) = v;
     r.fromGrid = false;
     recalibrate(true);
 }
 
-void MainWindow::updateInfo() {
-    if (!doc_.hasImage()) {
-        calInfo_->setText(QString());
-    } else if (doc_.cal.ok) {
-        cp::Pt c(0, 0);
-        for (const auto& r : doc_.refs) c += r.world;
-        c = c / double(doc_.refs.size());
-        calInfo_->setText(tr("<b>Calibrated</b> with %1 points - residual RMS %2 mm - %3 px/mm on the pattern")
-                              .arg(doc_.refs.size())
-                              .arg(doc_.cal.rmsMM, 0, 'f', 3)
-                              .arg(cp::pxPerMM(doc_.cal.Hw2i, c), 0, 'f', 1));
-    } else {
-        calInfo_->setText(tr("<b>Not calibrated</b> - need at least 4 reference points (not all on one line); have %1.")
-                              .arg(doc_.refs.size()));
-    }
-    if (doc_.profile.size() >= 2) {
-        double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
-        for (const auto& p : doc_.profile) {
-            x0 = std::min(x0, p.x); y0 = std::min(y0, p.y);
-            x1 = std::max(x1, p.x); y1 = std::max(y1, p.y);
+void MainWindow::updateSegList() {
+    if (!segList_) return;
+    const QSignalBlocker block(segList_);
+    segList_->clear();
+    for (size_t i = 0; i < doc_.segs.size(); ++i) {
+        const auto& s = doc_.segs[i];
+        const QString dims = s.arc ? QString("R %1 · %2°").arg(s.r, 0, 'f', 2).arg(std::fabs(s.sweep) * 57.29577951308232, 0, 'f', 0)
+                                   : QString("%1 mm").arg(s.length(), 0, 'f', 2);
+        auto* it = new QListWidgetItem(QString("%1\t%2").arg(s.arc ? tr("Arc") : tr("Line"), dims));
+        QPixmap sw(22, 10);
+        sw.fill(Qt::transparent);
+        {
+            QPainter p(&sw);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(s.arc ? theme::accent : theme::line);
+            p.drawRoundedRect(QRectF(0, 3, 22, 4), 2, 2);
         }
-        profileInfo_->setText(tr("%1 vertices - length %2 mm - size %3 x %4 mm")
-                                  .arg(doc_.profile.size())
-                                  .arg(cp::polylineLength(doc_.profile, doc_.closed), 0, 'f', 2)
-                                  .arg(x1 - x0, 0, 'f', 2)
-                                  .arg(y1 - y0, 0, 'f', 2));
-    } else {
-        profileInfo_->setText(tr("No profile."));
+        it->setIcon(QIcon(sw));
+        it->setToolTip(tr("Largest deviation %1 mm").arg(s.maxErr, 0, 'f', 3));
+        segList_->addItem(it);
     }
-    undoAct_->setEnabled(!undo_.empty());
-    redoAct_->setEnabled(!redo_.empty());
+    segList_->setIconSize(QSize(22, 10));
+    if (doc_.selectedSeg >= 0 && doc_.selectedSeg < segList_->count()) segList_->setCurrentRow(doc_.selectedSeg);
+}
+
+void MainWindow::updatePanel() {
+    if (!calStatus_) return;
+    if (doc_.cal.ok)
+        calStatus_->setText(QString("<span style='color:#46C38A'>&#10003;</span> %1 points · ±%2 mm")
+                                .arg(doc_.refs.size())
+                                .arg(doc_.cal.rmsMM, 0, 'f', 2));
+    else
+        calStatus_->setText(QString("<span style='color:#F2B544'>&#9888;</span> %1").arg(tr("not calibrated")));
+    sensValue_->setText(sensSlider_->value() == 50 ? tr("Auto") : QString::number(threshold(), 'f', 0));
+    smoothValue_->setText(QString("%1 mm").arg(smoothSlider_->value() / 100.0, 0, 'f', 2));
+    colorBtn_->setStyleSheet(QString("background: %1; border: 1px solid #3A404A; border-radius: 8px; min-height: 28px;")
+                                 .arg(pickedColor_.name()));
+    const QString tol = QString("%1 mm").arg(doc_.fitTol, 0, 'f', doc_.fitTol < 0.1 ? 3 : 2);
+    tolValue_->setText(tol);
+    tolValue2_->setText(tol);
+    int na = 0, nl = 0;
+    for (const auto& s : doc_.segs) (s.arc ? na : nl)++;
+    fitSummaryBtn_->setText(doc_.segs.empty() ? tr("—") : geometrySummary(na, nl, " · ") + tr(" — edit"));
+    fitSummaryBtn_->setEnabled(!doc_.segs.empty());
+}
+
+void MainWindow::updateResultCard() {
+    if (!resultCard_) return;
+    const bool has = doc_.profile.size() >= 2;
+    QString title, summary;
+    QStringList checks;
+    if (has) {
+        int na = 0, nl = 0;
+        double len = 0;
+        for (const auto& s : doc_.segs) {
+            (s.arc ? na : nl)++;
+            len += s.length();
+        }
+        if (doc_.segs.empty()) len = cp::polylineLength(doc_.profile, doc_.closed);
+        title = tr("Profile ready");
+        summary = doc_.segs.empty() ? tr("%1 mm long").arg(len, 0, 'f', 1)
+                                    : tr("%1 mm long · %2").arg(len, 0, 'f', 1).arg(geometrySummary(na, nl, ", "));
+    } else {
+        title = doc_.cal.ok ? tr("No wire found") : tr("Not calibrated");
+        summary = doc_.cal.ok ? tr("Adjust › click the wire, or pick its colour") : tr("Click 4 corners of a known rectangle");
+    }
+    if (doc_.cal.ok) {
+        checks << (gridDetected_ ? tr("Grid found · %1 mm").arg(doc_.squareMM, 0, 'g', 4)
+                                 : tr("Calibrated from %1 points").arg(doc_.refs.size()));
+        checks << tr("Perspective corrected");
+        checks << (doc_.cal.rmsMM < 0.2 ? tr("Fit ±%1 mm").arg(std::max(0.01, doc_.cal.rmsMM), 0, 'f', 2)
+                                        : "!" + tr("Calibration fit ±%1 mm").arg(doc_.cal.rmsMM, 0, 'f', 2));
+    } else {
+        checks << "!" + tr("Grid not found");
+    }
+    resultCard_->setResult(title, summary, checks, has);
+    layoutOverlays();
+}
+
+void MainWindow::updateAll() {
+    const bool hasImg = doc_.hasImage();
+    const bool hasProfile = doc_.profile.size() >= 2;
+    fileChip_->setVisible(hasImg);
+    fileChip_->setText(QFileInfo(doc_.path).fileName());
+    helpBtn_->setVisible(!hasImg);
+    openBtn_->setVisible(hasImg);
+    exportBtn_->setVisible(hasImg);
+    exportBtn_->setEnabled(hasProfile);
+    moreBtn_->setVisible(hasImg);
+    if (!hasImg) pages_->setCurrentIndex(0);
+    if (undoBtn_) {
+        undoBtn_->setEnabled(!undo_.empty());
+        redoBtn_->setEnabled(!redo_.empty());
+    }
+    resultCard_->setVisible(hasImg && !details_ && !calibrating_);
+    calibCard_->setVisible(hasImg && calibrating_);
+    viewSeg_->setVisible(hasImg && !calibrating_ && doc_.cal.ok);
+    zoomBox_->setVisible(hasImg);
+    QString hint;
+    if (details_) {
+        switch (canvas_->tool()) {
+            case Canvas::Tool::Select: hint = tr("Drag a point · double-click the line to add one · right-click to delete"); break;
+            case Canvas::Tool::AddRef: hint = tr("Click a known grid corner to add a reference point"); break;
+            case Canvas::Tool::DrawProfile: hint = tr("Click to place points — they become lines and arcs · Enter to finish"); break;
+            case Canvas::Tool::PickObject: hint = tr("Click on the wire"); break;
+            case Canvas::Tool::PickColor: hint = tr("Click on the wire to sample its colour"); break;
+        }
+        if (!lastMessage_.isEmpty()) hint = lastMessage_;
+    }
+    hint_->setText(hint);
+    hint_->setVisible(!hint.isEmpty() && hasImg);
+    updatePanel();
+    updateResultCard();
 }
 
 // ---------------------------------------------------------------------------
@@ -919,17 +1335,18 @@ void MainWindow::pushUndo() {
     undo_.push_back(snapshot());
     if (undo_.size() > 200) undo_.erase(undo_.begin());
     redo_.clear();
-    updateInfo();
+    if (undoBtn_) {
+        undoBtn_->setEnabled(true);
+        redoBtn_->setEnabled(false);
+    }
 }
 
 void MainWindow::restore(const Snapshot& s) {
     doc_.refs = s.refs;
     doc_.profile = s.profile;
     doc_.closed = s.closed;
-    closedCheck_->blockSignals(true);
-    closedCheck_->setChecked(s.closed);
-    closedCheck_->blockSignals(false);
     recalibrate(true);
+    refit();
 }
 
 void MainWindow::undo() {
@@ -952,10 +1369,16 @@ void MainWindow::redo() {
 // Drag & drop
 // ---------------------------------------------------------------------------
 void MainWindow::dragEnterEvent(QDragEnterEvent* e) {
-    if (e->mimeData()->hasUrls()) e->acceptProposedAction();
+    if (e->mimeData()->hasUrls()) {
+        e->acceptProposedAction();
+        start_->setDropHover(true);
+    }
 }
 
+void MainWindow::dragLeaveEvent(QDragLeaveEvent*) { start_->setDropHover(false); }
+
 void MainWindow::dropEvent(QDropEvent* e) {
+    start_->setDropHover(false);
     const auto urls = e->mimeData()->urls();
     if (!urls.isEmpty() && urls.front().isLocalFile()) loadImage(urls.front().toLocalFile());
 }

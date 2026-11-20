@@ -1,5 +1,7 @@
 #include "canvas.h"
 
+#include "theme.h"
+
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -117,6 +119,7 @@ bool Canvas::dispToImg(QPointF d, cp::Pt& p) const {
 
 // --- hit testing -------------------------------------------------------------
 int Canvas::hitVertex(QPointF s) const {
+    if (!handlesVisible()) return -1;
     int best = -1;
     double bd = kHit;
     for (size_t i = 0; i < doc_->profile.size(); ++i) {
@@ -183,7 +186,7 @@ void Canvas::drawWorldGrid(QPainter& p) {
     if (s <= 0) return;
     cp::RectD r = doc_->rectArea.valid() ? doc_->rectArea : doc_->detectRoi;
     if (!r.valid()) return;
-    p.setPen(QPen(QColor(0, 200, 255, 110), 1.0));
+    p.setPen(QPen(QColor(90, 169, 255, 70), 1.0));
     const int i0 = int(std::ceil(r.x0 / s)), i1 = int(std::floor(r.x1 / s));
     const int j0 = int(std::ceil(r.y0 / s)), j1 = int(std::floor(r.y1 / s));
     if (i1 - i0 > 400 || j1 - j0 > 400) return;
@@ -199,10 +202,11 @@ void Canvas::drawWorldGrid(QPainter& p) {
 
 void Canvas::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    p.fillRect(rect(), QColor(38, 40, 44));
+    p.fillRect(rect(), theme::stage);
     const QPixmap& pm = view_ == View::Original ? origPix_ : rectPix_;
     if (pm.isNull()) {
-        p.setPen(QColor(170, 170, 170));
+        p.setPen(theme::muted);
+        p.setFont(theme::uiFont(14));
         const QString msg = !doc_->hasImage()
                                 ? tr("Open a photo (File > Open, or drag && drop an image here).")
                                 : tr("No calibration yet: detect the grid or add at least 4 reference points.");
@@ -215,7 +219,7 @@ void Canvas::paintEvent(QPaintEvent*) {
     p.translate(pan_);
     p.scale(zoom_, zoom_);
     p.drawPixmap(0, 0, pm);
-    if (view_ == View::Rectified && showMask_ && !doc_->maskImage.isNull() && doc_->rectRes > 0) {
+    if (view_ == View::Rectified && details_ && showMask_ && !doc_->maskImage.isNull() && doc_->rectRes > 0) {
         const cp::RectD& a = doc_->maskArea;
         const double r = doc_->rectRes;
         p.drawImage(QRectF((a.x0 - doc_->rectArea.x0) * r, (a.y0 - doc_->rectArea.y0) * r, a.w() * r, a.h() * r),
@@ -224,9 +228,9 @@ void Canvas::paintEvent(QPaintEvent*) {
     p.restore();
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    drawWorldGrid(p);
+    if (details_) drawWorldGrid(p);
 
-    // Grid corner candidates.
+    // Grid corner candidates (diagnostics).
     if (showCand_ && view_ == View::Original) {
         p.setPen(QPen(QColor(255, 255, 0, 160), 1));
         for (const auto& c : doc_->grid.candidates) {
@@ -235,8 +239,8 @@ void Canvas::paintEvent(QPaintEvent*) {
         }
     }
 
-    // Detection region.
-    if (doc_->detectRoi.valid() && doc_->cal.ok) {
+    // Detection region (details only).
+    if (details_ && doc_->detectRoi.valid() && doc_->cal.ok) {
         const cp::RectD& r = doc_->detectRoi;
         QPolygonF poly;
         bool ok = true;
@@ -246,85 +250,161 @@ void Canvas::paintEvent(QPaintEvent*) {
             poly << toScreen(d);
         }
         if (ok) {
-            p.setPen(QPen(QColor(255, 0, 255, 170), 1.2, Qt::DashLine));
+            p.setPen(QPen(QColor(255, 255, 255, 70), 1.2, Qt::DashLine));
             p.setBrush(Qt::NoBrush);
             p.drawPolygon(poly);
         }
     }
 
-    // Reference points.
-    QFont f = p.font();
-    f.setPointSizeF(8);
-    p.setFont(f);
-    const bool manyRefs = doc_->refs.size() > 40;
-    for (size_t i = 0; i < doc_->refs.size(); ++i) {
-        QPointF d;
-        if (!imgToDisp(doc_->refs[i].img, d)) continue;
-        const QPointF s = toScreen(d);
-        const bool sel = int(i) == selRef_, hov = int(i) == hoverRef_;
-        const QColor c = doc_->cal.ok ? errColor(doc_->refs[i].errMM) : QColor(80, 200, 255);
-        p.setPen(QPen(sel ? QColor(255, 255, 255) : c, sel || hov ? 2.5 : 1.6));
-        p.setBrush(Qt::NoBrush);
-        const double rr = sel || hov ? 7 : 5;
-        p.drawEllipse(s, rr, rr);
-        p.drawLine(s - QPointF(rr + 3, 0), s - QPointF(rr - 2, 0));
-        p.drawLine(s + QPointF(rr - 2, 0), s + QPointF(rr + 3, 0));
-        if (!manyRefs || sel || hov) {
-            p.setPen(QColor(255, 255, 255));
-            p.drawText(s + QPointF(8, -6), QString::number(i + 1));
-        }
-    }
-
-    // Profile.
-    if (!doc_->profile.empty()) {
-        QPolygonF poly;
-        for (const auto& w : doc_->profile) {
+    // Reference points: always on the photo, in the top view only in details.
+    if (view_ == View::Original || details_) {
+        p.setFont(theme::uiFont(11, QFont::DemiBold));
+        const bool manyRefs = doc_->refs.size() > 40;
+        for (size_t i = 0; i < doc_->refs.size(); ++i) {
             QPointF d;
-            if (worldToDisp(w, d)) poly << toScreen(d);
-        }
-        p.setPen(QPen(QColor(0, 0, 0, 160), 4.5));
-        if (doc_->closed) p.drawPolygon(poly); else p.drawPolyline(poly);
-        p.setPen(QPen(QColor(255, 140, 0), 2.0));
-        if (doc_->closed) p.drawPolygon(poly); else p.drawPolyline(poly);
-        const bool showVerts = poly.size() < 400 || zoom_ > 1.5;
-        for (int i = 0; i < poly.size() && showVerts; ++i) {
-            const bool sel = i == selVertex_, hov = i == hoverVertex_;
-            const double r = sel || hov ? 4.5 : 2.8;
-            p.setPen(QPen(Qt::black, 1));
-            p.setBrush(sel ? QColor(255, 255, 255) : (i == 0 ? QColor(80, 255, 80) : QColor(255, 200, 0)));
-            p.drawRect(QRectF(poly[i].x() - r, poly[i].y() - r, 2 * r, 2 * r));
+            if (!imgToDisp(doc_->refs[i].img, d)) continue;
+            const QPointF s = toScreen(d);
+            const bool sel = int(i) == selRef_, hov = int(i) == hoverRef_;
+            const QColor c = doc_->cal.ok ? errColor(doc_->refs[i].errMM) : theme::accent;
+            const double rr = sel || hov ? 8 : 6;
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor(0, 0, 0, 140), sel || hov ? 4.5 : 3.5));
+            p.drawEllipse(s, rr, rr);
+            p.setPen(QPen(sel ? theme::text : c, sel || hov ? 2.5 : 2));
+            p.drawEllipse(s, rr, rr);
+            if (!manyRefs || sel || hov) {
+                const QRectF tr(s.x() + rr, s.y() - rr - 16, 18, 16);
+                p.setPen(Qt::NoPen);
+                p.setBrush(doc_->cal.ok ? QColor(22, 24, 28, 220) : theme::accent);
+                p.drawRoundedRect(tr, 8, 8);
+                p.setPen(doc_->cal.ok ? theme::text : theme::onAccent);
+                p.drawText(tr, Qt::AlignCenter, QString::number(i + 1));
+            }
         }
     }
 
-    // Scale bar (rectified view).
+    // Profile: fitted lines & arcs (or the raw polyline).
+    if (!doc_->profile.empty()) {
+        auto mapPoly = [&](const std::vector<cp::Pt>& pts) {
+            QPolygonF poly;
+            for (const auto& w : pts) {
+                QPointF d;
+                if (worldToDisp(w, d)) poly << toScreen(d);
+            }
+            return poly;
+        };
+        const bool useSegs = doc_->fitEnabled && !doc_->segs.empty();
+        const double step = 0.5 / std::max(1e-6, pxPerMMOnScreen());
+        const QPolygonF all = mapPoly(useSegs ? cp::sampleSegments(doc_->segs, step) : doc_->profile);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(0, 0, 0, 150), 6.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        if (doc_->closed && !useSegs) p.drawPolygon(all); else p.drawPolyline(all);
+        if (useSegs && doc_->showSegColors) {
+            for (size_t i = 0; i < doc_->segs.size(); ++i) {
+                const auto& sg = doc_->segs[i];
+                const QPolygonF poly = mapPoly(cp::sampleSegments({sg}, step));
+                const bool sel = int(i) == doc_->selectedSeg;
+                p.setPen(QPen(sg.arc ? theme::accent : theme::line, sel ? 5.5 : 3.0, Qt::SolidLine, Qt::RoundCap,
+                              Qt::RoundJoin));
+                p.drawPolyline(poly);
+            }
+        } else {
+            p.setPen(QPen(theme::accent, 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            if (doc_->closed && !useSegs) p.drawPolygon(all); else p.drawPolyline(all);
+        }
+        // Joints between segments.
+        if (useSegs && (doc_->showSegColors || details_)) {
+            p.setPen(QPen(theme::text, 2.0));
+            p.setBrush(theme::stage);
+            for (size_t i = 0; i + 1 < doc_->segs.size(); ++i) {
+                QPointF d;
+                if (worldToDisp(doc_->segs[i].b, d)) p.drawEllipse(toScreen(d), 4.5, 4.5);
+            }
+        }
+        // Editable points, or just the two ends in the simple view.
+        if (handlesVisible()) {
+            const QPolygonF pts = mapPoly(doc_->profile);
+            const bool dense = pts.size() > 300 && zoom_ < 1.5;
+            for (int i = 0; i < pts.size() && !dense; ++i) {
+                const bool sel = i == selVertex_, hov = i == hoverVertex_;
+                const double r = sel || hov ? 5.0 : 3.5;
+                p.setPen(QPen(theme::stage, 1.5));
+                p.setBrush(sel ? theme::text : (i == 0 ? theme::ok : QColor("#FFD2B0")));
+                p.drawRoundedRect(QRectF(pts[i].x() - r, pts[i].y() - r, 2 * r, 2 * r), 1.5, 1.5);
+            }
+        } else if (!doc_->closed && all.size() >= 2) {
+            p.setPen(QPen(theme::stage, 2));
+            p.setBrush(theme::accent);
+            p.drawEllipse(all.front(), 5, 5);
+            p.drawEllipse(all.back(), 5, 5);
+        }
+        if (!details_ && view_ == View::Rectified) drawDimensions(p);
+    }
+
+    // Scale bar (top view).
     if (view_ == View::Rectified && doc_->rectRes > 0) {
         double mm = 1;
-        for (double c : {1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0})
-            if (c * doc_->rectRes * zoom_ < 160) mm = c;
+        for (double c : {0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0})
+            if (c * doc_->rectRes * zoom_ < 140) mm = c;
         const double L = mm * doc_->rectRes * zoom_;
-        const QPointF a(20, height() - 24);
-        p.setPen(QPen(Qt::black, 5));
+        const QPointF a(width() - 24 - L, height() - 22);
+        p.setFont(theme::uiFont(11, QFont::DemiBold));
+        p.setPen(QPen(QColor(0, 0, 0, 160), 5, Qt::SolidLine, Qt::FlatCap));
         p.drawLine(a, a + QPointF(L, 0));
-        p.setPen(QPen(Qt::white, 3));
+        p.setPen(QPen(theme::text, 2.5, Qt::SolidLine, Qt::FlatCap));
         p.drawLine(a, a + QPointF(L, 0));
-        p.drawText(a + QPointF(0, -8), QString("%1 mm").arg(mm));
+        p.drawText(QRectF(a.x() - 20, a.y() - 22, L + 40, 16), Qt::AlignCenter, QString("%1 mm").arg(mm));
     }
+}
 
-    // Tool hint.
-    QString hint;
-    switch (tool_) {
-        case Tool::Select: hint = tr("Edit: drag points/vertices, Ctrl+click or double-click a segment to insert, right-click to delete"); break;
-        case Tool::AddRef: hint = tr("Add reference point: click a known mark (snaps to grid corners), then set its mm coordinates"); break;
-        case Tool::DrawProfile: hint = tr("Draw profile: click to add vertices, Backspace removes the last, Enter/Esc finishes"); break;
-        case Tool::PickObject: hint = tr("Click on the wire / metal piece to select it"); break;
-        case Tool::PickColor: hint = tr("Click on the wire to sample its colour"); break;
+double Canvas::pxPerMMOnScreen() const {
+    if (view_ == View::Rectified) return doc_->rectRes * zoom_;
+    if (!doc_->cal.ok || doc_->profile.empty()) return 10;
+    return cp::pxPerMM(doc_->cal.Hw2i, doc_->profile.front()) * zoom_;
+}
+
+void Canvas::zoomBy(double f) {
+    const QPointF c(width() / 2.0, height() / 2.0);
+    const QPointF d = toDisp(c);
+    zoom_ = std::clamp(zoom_ * f, 0.02, 80.0);
+    pan_ = c - d * zoom_;
+    update();
+}
+
+void Canvas::drawDimensions(QPainter& p) {
+    const auto pts = (doc_->fitEnabled && !doc_->segs.empty()) ? cp::sampleSegments(doc_->segs, 0.05) : doc_->profile;
+    if (pts.size() < 2) return;
+    double x0 = 1e300, y0 = 1e300, x1 = -1e300, y1 = -1e300;
+    for (const auto& q : pts) {
+        x0 = std::min(x0, q.x); y0 = std::min(y0, q.y);
+        x1 = std::max(x1, q.x); y1 = std::max(y1, q.y);
     }
-    p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, 150));
-    const QRectF hr(8, 8, std::min(width() - 16.0, p.fontMetrics().horizontalAdvance(hint) + 16.0), 22);
-    p.drawRoundedRect(hr, 4, 4);
-    p.setPen(QColor(235, 235, 235));
-    p.drawText(hr, Qt::AlignCenter, hint);
+    QPointF a, b, c;
+    if (!worldToDisp(cp::Pt(x0, y1), a) || !worldToDisp(cp::Pt(x1, y1), b) || !worldToDisp(cp::Pt(x1, y0), c)) return;
+    a = toScreen(a);
+    b = toScreen(b);
+    c = toScreen(c);
+    const double off = 26;
+    p.setFont(theme::uiFont(12, QFont::DemiBold));
+    auto label = [&](QPointF at, const QString& t) {
+        const QRectF r(at.x() - 34, at.y() - 12, 68, 24);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(22, 24, 28, 235));
+        p.drawRoundedRect(r, 6, 6);
+        p.setPen(theme::text);
+        p.drawText(r, Qt::AlignCenter, t);
+    };
+    p.setPen(QPen(QColor(236, 238, 241, 200), 1.2));
+    const double yW = a.y() + off;
+    p.drawLine(QPointF(a.x(), yW), QPointF(b.x(), yW));
+    p.drawLine(QPointF(a.x(), yW - 6), QPointF(a.x(), yW + 6));
+    p.drawLine(QPointF(b.x(), yW - 6), QPointF(b.x(), yW + 6));
+    const double xH = b.x() + off;
+    p.drawLine(QPointF(xH, c.y()), QPointF(xH, b.y()));
+    p.drawLine(QPointF(xH - 6, c.y()), QPointF(xH + 6, c.y()));
+    p.drawLine(QPointF(xH - 6, b.y()), QPointF(xH + 6, b.y()));
+    label(QPointF((a.x() + b.x()) / 2, yW), QString("%1 mm").arg(x1 - x0, 0, 'f', 1));
+    label(QPointF(xH, (c.y() + b.y()) / 2), QString("%1 mm").arg(y1 - y0, 0, 'f', 1));
 }
 
 // --- interaction -------------------------------------------------------------
@@ -426,7 +506,7 @@ void Canvas::mousePressEvent(QMouseEvent* e) {
     }
     int seg;
     cp::Pt w;
-    if ((e->modifiers() & Qt::ControlModifier) && hitSegment(s, seg, w)) {
+    if ((e->modifiers() & Qt::ControlModifier) && handlesVisible() && hitSegment(s, seg, w)) {
         emit aboutToModify();
         doc_->profile.insert(doc_->profile.begin() + seg + 1, w);
         drag_ = Drag::Vertex;
@@ -441,7 +521,7 @@ void Canvas::mousePressEvent(QMouseEvent* e) {
 }
 
 void Canvas::mouseDoubleClickEvent(QMouseEvent* e) {
-    if (tool_ != Tool::Select || e->button() != Qt::LeftButton) return;
+    if (tool_ != Tool::Select || e->button() != Qt::LeftButton || !handlesVisible()) return;
     int seg;
     cp::Pt w;
     if (hitVertex(e->position()) < 0 && hitSegment(e->position(), seg, w)) {

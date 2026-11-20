@@ -23,6 +23,7 @@ add_library(cpcore STATIC
   src/core/grid_detect.cpp
   src/core/profile_detect.cpp
   src/core/calib.cpp
+  src/core/fit.cpp
   src/core/export.cpp
   src/core/synth.cpp
 )
@@ -41,6 +42,10 @@ if(CP_BUILD_GUI)
     src/app/canvas.cpp
     src/app/canvas.h
     src/app/document.h
+    src/app/theme.cpp
+    src/app/theme.h
+    src/app/widgets.cpp
+    src/app/widgets.h
   )
   target_link_libraries(ContourProfiler PRIVATE cpcore Qt6::Widgets)
   set_target_properties(ContourProfiler PROPERTIES
@@ -63,6 +68,7 @@ endif()
 # ---------------------------------------------------------------------------
 if(CP_BUILD_TESTS)
   enable_testing()
+  add_test(NAME line_arc_fitting COMMAND cp_selftest fit)
   add_test(NAME synthetic_ground_truth
            COMMAND cp_selftest synth ${CMAKE_BINARY_DIR}/test-output/synth)
   file(GLOB CP_REFERENCE_PHOTOS ${CMAKE_SOURCE_DIR}/tests/data/*.jpg)

@@ -1,6 +1,7 @@
 #include "export.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <locale>
 #include <sstream>
@@ -52,8 +53,11 @@ std::string makeDXF(const std::vector<ExportPolyline>& polys) {
         if (p.pts.size() < 2) continue;
         os << "0\nPOLYLINE\n8\n" << p.layer << "\n66\n1\n70\n" << (p.closed ? 1 : 0)
            << "\n10\n0.0\n20\n0.0\n30\n0.0\n";
-        for (const Pt& q : p.pts)
+        for (size_t i = 0; i < p.pts.size(); ++i) {
+            const Pt& q = p.pts[i];
             os << "0\nVERTEX\n8\n" << p.layer << "\n10\n" << q.x << "\n20\n" << q.y << "\n30\n0.0\n";
+            if (i < p.bulge.size() && p.bulge[i] != 0) os << "42\n" << p.bulge[i] << "\n";
+        }
         os << "0\nSEQEND\n8\n" << p.layer << "\n";
     }
     os << "0\nENDSEC\n0\nEOF\n";
@@ -72,8 +76,22 @@ std::string makeSVG(const std::vector<ExportPolyline>& polys) {
     for (const auto& p : polys) {
         if (p.pts.size() < 2) continue;
         os << "  <path id=\"" << p.layer << "\" fill=\"none\" stroke=\"black\" stroke-width=\"0.1\" d=\"";
-        for (size_t i = 0; i < p.pts.size(); ++i)
-            os << (i ? " L " : "M ") << (p.pts[i].x - x0 + m) << " " << (y1 - p.pts[i].y + m);
+        for (size_t i = 0; i < p.pts.size(); ++i) {
+            const double X = p.pts[i].x - x0 + m, Y = y1 - p.pts[i].y + m;
+            const double b = (i > 0 && i - 1 < p.bulge.size()) ? p.bulge[i - 1] : 0.0;
+            if (i == 0) {
+                os << "M " << X << " " << Y;
+            } else if (b != 0) {
+                // Arc: radius from chord and bulge. The Y flip keeps the visual
+                // turning direction; SVG's sweep-flag 1 is clockwise on screen.
+                const double chord = dist(p.pts[i - 1], p.pts[i]);
+                const double r = chord * (1 + b * b) / (4 * std::fabs(b));
+                os << " A " << r << " " << r << " 0 " << (std::fabs(b) > 1 ? 1 : 0) << " " << (b > 0 ? 0 : 1) << " "
+                   << X << " " << Y;
+            } else {
+                os << " L " << X << " " << Y;
+            }
+        }
         if (p.closed) os << " Z";
         os << "\"/>\n";
     }

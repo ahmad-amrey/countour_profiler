@@ -30,8 +30,12 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
   background, then traces its centre line (wire) or outline (strip).
   - *Pick object*: click the wire if something else was found.
   - *Pick colour*: detect by colour for difficult backgrounds.
-- **Editing**: drag vertices, Ctrl+click or double-click to insert, right-click
-  to delete, draw by hand, simplify, reverse, and undo/redo.
+- **Lines & arcs (reverse engineering):** traced or clicked points are
+  automatically rebuilt as the fewest straight lines and true circular arcs
+  within a tolerance. Joints are continuous. Arcs export as real DXF arcs
+  (polyline bulges) and SVG arc commands.
+- **Editing**: drag points, double-click to insert, right-click to delete, draw
+  by hand, and undo/redo.
 - **Rectified top view** with a scale bar. It can be saved as a PNG with the
   true scale embedded.
 - **Export**:
@@ -58,12 +62,33 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
 
 ## Using the application
 
-| Step | What to check |
+The interface is tiered. The default path is three steps, and the details
+stay out of the way until you ask for them.
+
+**Simple path**
+1. **Open** a photo by dropping it on the window or clicking *Choose photo*.
+   Check the grid square size first; it defaults to 10 mm.
+2. **Check the result.** The top view shows the traced profile with its size.
+   The result card confirms the grid was found and the perspective corrected,
+   and shows the fit quality and the profile as *N arcs · M lines*.
+3. **Export DXF.** More options (origin, reference-grid layer) sit behind a
+   disclosure in the export sheet.
+
+**Details** (*Adjust*): a tool rail and a side panel.
+
+| Section | What you can do |
 |---|---|
-| **1 Calibration pattern** | Pattern type and **square size**. *Detect grid* runs automatically on open. |
-| **2 Reference points** | The cyan grid must lie exactly on the pattern lines. Points are coloured by residual: green < 0.1 mm, orange < 0.3 mm, red worse. Drag, delete (right-click / Del) or add points, and edit mm values in the table. |
-| **3 Profile** | View → *Rectified* (key `2`). Green overlay: detected object. Red: other candidates. Use *Pick object*, *Pick colour* or the threshold if needed, then edit vertices. |
-| **4 Export** | DXF / SVG / CSV. The origin is either the profile's bottom-left corner or the grid origin. |
+| **Calibration** | Pattern type, square size, detect again. *Reference points* lets you drag, add or delete points and type their mm values. Points are coloured by fit: green < 0.1 mm, orange < 0.3 mm, red worse. |
+| **Wire detection** | Automatic or by colour, sensitivity, smoothing, search margin, centre line or outline. Tools: *Pick the wire* and *Pick colour*. |
+| **Lines & arcs** | The traced or hand-placed points are rebuilt as the fewest straight lines and circular arcs within a tolerance (default 0.10 mm). The *edit* page lists every segment with its length or radius and sweep, and colours lines blue and arcs orange on the canvas. |
+
+**No grid detected?** A guided card appears: click the 4 corners of one grid
+square, or of any rectangle whose size you enter, and the flow continues
+automatically.
+
+**Drawing by hand:** with *Draw profile* (`D`), click a few points along the
+shape. They are turned into lines and arcs automatically, so three or four
+clicks on a curve become one true arc.
 
 Shortcuts:
 
@@ -125,6 +150,7 @@ CMake options: `-DCP_BUILD_GUI=OFF` builds only the core and the tests;
 ctest --test-dir build --output-on-failure
 ```
 
+- **`line_arc_fitting`**: known lines and arcs, sampled as a dense noisy trace and as a few hand-placed clicks, must come back with the same structure and radii (within 0.1 mm), and arcs must round-trip through the DXF bulges.
 - **`synthetic_ground_truth`**: renders perspective photos with known geometry
   (bright and dark line grids, a checkerboard, noise, vignetting) and compares
   the result with the ground truth.
@@ -175,7 +201,14 @@ The `tests/data` images were re-encoded without any metadata (no EXIF/GPS).
    - Thinning gives the skeleton; the longest path through it, with gaps
      bridged, is trimmed of end kinks and extended to the physical tips.
      Then it is smoothed and simplified.
-4. **Export** (`export.cpp`): DXF R12 POLYLINE entities, SVG, CSV, all in mm.
+4. **Lines & arcs** (`fit.cpp`): dynamic programming over break points finds
+   the fewest segments within tolerance. Each span is a line if every point is
+   within tolerance of the chord. Otherwise it is an arc through both end
+   points, with its centre on the chord bisector fitted in closed form, as long
+   as the points progress monotonically around it. Ties go to the more
+   accurate solution.
+5. **Export** (`export.cpp`): DXF R12 POLYLINE entities with bulges for arcs,
+   SVG paths with arc commands, and CSV, all in mm.
 
 ## Project layout
 

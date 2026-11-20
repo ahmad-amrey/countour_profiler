@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "calib.h"
+#include "fit.h"
 #include "geom.h"
 #include "grid_detect.h"
 #include "image.h"
@@ -28,8 +29,15 @@ struct Document {
     cp::Calibration cal;
 
     cp::RectD detectRoi;   // world rectangle searched for the profile
-    std::vector<cp::Pt> profile;  // world mm, image-like axes (Y down)
+    std::vector<cp::Pt> profile;  // world mm, image-like axes (Y down); the editable points
     bool closed = false;
+
+    // Lines & arcs rebuilt from the points (empty = show the raw polyline).
+    std::vector<cp::Segment> segs;
+    bool fitEnabled = true;
+    double fitTol = 0.10;          // mm
+    int selectedSeg = -1;
+    bool showSegColors = false;    // lines blue, arcs orange (Lines & arcs view)
 
     // Rectified (top-down) rendering.
     QImage rectified;

@@ -19,11 +19,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <random>
+#include <string>
 
 #include "calib.h"
 #include "export.h"
+#include "fit.h"
 #include "grid_detect.h"
 #include "image.h"
 #include "profile_detect.h"
@@ -151,6 +155,13 @@ static void writeOutputs(const QString& base, const ImageU8& img, const RunOut& 
         for (const QPointF& q : pl) p.drawPoint(q);
     }
     rq.save(base + "_rectified.png");
+    if (std::getenv("CP_CLEAN_OUTPUT")) {
+        // Overlay-free top view plus the profile in its pixel coordinates.
+        toQImage(rect).save(base + "_topview.png");
+        std::ofstream px(QString(base + "_topview_profile.csv").toStdString());
+        px << "u,v\n";
+        for (const Pt& w : r.prof.pts) px << (w.x - r.roi.x0) * res << "," << (w.y - r.roi.y0) * res << "\n";
+    }
     // DXF in CAD orientation.
     ExportPolyline e;
     for (const Pt& w : r.prof.pts) e.pts.emplace_back(w.x, -w.y);
@@ -321,6 +332,15 @@ static int cmdConsistency(const QString& outdir, double square, const QStringLis
         writeOutputs(outdir + "/" + QFileInfo(f).completeBaseName(), img, r);
         if (!r.ok) { ++failures; std::printf("  FAIL: no profile\n"); continue; }
         profiles.push_back(r.prof.pts);
+        {
+            FitOptions fo;
+            fo.tol = 0.05;
+            const auto segs = fitLinesArcs(r.prof.pts, false, fo);
+            std::string desc;
+            for (const auto& sg : segs)
+                desc += sg.arc ? " arc(R" + std::to_string(sg.r).substr(0, 4) + ")" : " line(" + std::to_string(sg.length()).substr(0, 4) + ")";
+            std::printf("  lines & arcs:%s\n", desc.c_str());
+        }
     }
     if (profiles.size() >= 2) {
         std::vector<double> lens;
@@ -338,6 +358,92 @@ static int cmdConsistency(const QString& outdir, double square, const QStringLis
         }
     }
     std::printf("%s\n", failures ? "FAIL" : "PASS");
+    return failures;
+}
+
+// Line/arc fitting against known geometry: dense noisy trace and sparse clicks.
+static int cmdFit() {
+    const double kPi = 3.14159265358979323846;
+    // Truth: line (0,0)->(20,0), arc R10 turning +90deg, line 15, arc R4 turning -60deg.
+    std::vector<Segment> truth;
+    auto addLine = [&](Pt a, Pt b) { Segment s; s.a = a; s.b = b; truth.push_back(s); };
+    auto addArc = [&](Pt a, double dirAng, double R, double sweep) {
+        Segment s; s.arc = true; s.a = a; s.r = R; s.sweep = sweep;
+        const double side = sweep > 0 ? 1 : -1;  // centre to the left (+) of travel
+        s.c = a + Pt(-std::sin(dirAng), std::cos(dirAng)) * (R * side);
+        s.b = s.pointAt(1.0);
+        truth.push_back(s);
+        return s.b;
+    };
+    addLine(Pt(0, 0), Pt(20, 0));
+    Pt e = addArc(Pt(20, 0), 0, 10, kPi / 2);
+    const Pt e2 = e + Pt(0, 15);
+    addLine(e, e2);
+    addArc(e2, kPi / 2, 4, -kPi / 3);
+    int failures = 0;
+    auto report = [&](const char* name, const std::vector<Pt>& pts, double tol, int expLines, int expArcs) {
+        FitOptions o; o.tol = tol;
+        const auto segs = fitLinesArcs(pts, false, o);
+        int nl = 0, na = 0; double maxErr = 0;
+        std::string radii;
+        for (const auto& s : segs) {
+            (s.arc ? na : nl)++;
+            maxErr = std::max(maxErr, s.maxErr);
+            if (s.arc) radii += " R" + std::to_string(s.r).substr(0, 5);
+        }
+        const bool ok = nl == expLines && na == expArcs;
+        std::printf("[fit %s] %zu points -> %d lines, %d arcs (%s), max dev %.3f mm  %s\n", name, pts.size(), nl, na,
+                    radii.c_str(), maxErr, ok ? "PASS" : "FAIL");
+        if (!ok) ++failures;
+        return segs;
+    };
+    // Dense trace with noise (like a detected wire), 0.05 mm spacing.
+    std::mt19937 rng(7);
+    std::normal_distribution<double> noise(0, 0.01);
+    std::vector<Pt> dense;
+    for (const auto& s : truth) {
+        const int k = std::max(2, int(s.length() / 0.05));
+        for (int i = dense.empty() ? 0 : 1; i <= k; ++i) {
+            const Pt q = s.pointAt(double(i) / k);
+            dense.push_back(q + Pt(noise(rng), noise(rng)));
+        }
+    }
+    // As in the app: simplify first, then fit.
+    const auto segsDense = report("dense trace", dense, 0.05, 2, 2);
+    report("simplified trace", simplifyDP(dense, 0.02, false), 0.05, 2, 2);
+    for (const auto& s : segsDense)
+        if (s.arc && std::fabs(s.r - 10) > 0.1 && std::fabs(s.r - 4) > 0.1) { std::printf("  radius off\n"); ++failures; }
+    // Sparse clicks: a few points per feature, slightly off (hand placement).
+    std::vector<Pt> clicks = {Pt(0, 0.05), Pt(10, -0.04), Pt(20, 0)};
+    for (double f : {0.33, 0.66, 1.0}) clicks.push_back(truth[1].pointAt(f) + Pt(0.03, -0.03));
+    clicks.push_back(truth[2].pointAt(0.5));
+    clicks.push_back(truth[2].b);
+    for (double f : {0.5, 1.0}) clicks.push_back(truth[3].pointAt(f));
+    report("sparse clicks", clicks, 0.1, 2, 2);
+    // Arcs must reach the DXF as bulges, and the bulge must reproduce the arc.
+    {
+        ExportPolyline e;
+        int arcs = 0;
+        for (const auto& s : segsDense) {
+            e.pts.push_back(s.a);
+            e.bulge.push_back(s.bulge());
+            arcs += s.arc;
+        }
+        e.pts.push_back(segsDense.back().b);
+        const std::string dxf = makeDXF({e});
+        int n42 = 0;
+        for (size_t pos = 0; (pos = dxf.find("\n42\n", pos)) != std::string::npos; ++pos) ++n42;
+        double worst = 0;
+        for (const auto& s : segsDense) {
+            if (!s.arc) continue;
+            const double chord = dist(s.a, s.b), b = std::fabs(s.bulge());
+            worst = std::max(worst, std::fabs(chord * (1 + b * b) / (4 * b) - s.r));
+        }
+        const bool ok = n42 == arcs && worst < 1e-6;
+        std::printf("[fit dxf] %d arcs -> %d bulge vertices, radius round-trip error %.2g mm  %s\n", arcs, n42, worst,
+                    ok ? "PASS" : "FAIL");
+        if (!ok) ++failures;
+    }
     return failures;
 }
 
@@ -375,6 +481,7 @@ int main(int argc, char** argv) {
         for (int i = 4; i < argc; ++i) files << QString::fromLocal8Bit(argv[i]);
         return cmdRun(argv[2], QString(argv[3]).toDouble(), files);
     }
+    if (argc >= 2 && QString(argv[1]) == "fit") return cmdFit();
     if (argc >= 6 && QString(argv[1]) == "consistency") {
         QStringList files;
         for (int i = 4; i < argc; ++i) files << QString::fromLocal8Bit(argv[i]);

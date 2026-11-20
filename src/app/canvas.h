@@ -26,6 +26,10 @@ public:
     void setShowGrid(bool on) { showGrid_ = on; update(); }
     void setShowMask(bool on) { showMask_ = on; update(); }
     void setShowCandidates(bool on) { showCand_ = on; update(); }
+    void setDetails(bool on) { details_ = on; update(); }
+    bool details() const { return details_; }
+    void setShowPoints(bool on) { showPoints_ = on; update(); }
+    void zoomBy(double factor);
     int selectedRef() const { return selRef_; }
     void setSelectedRef(int i) { selRef_ = i; update(); }
 
@@ -65,6 +69,9 @@ private:
     cp::Pt snapImage(cp::Pt img, QPointF screen) const;
     QSizeF contentSize() const;
     void drawWorldGrid(QPainter& p);
+    void drawDimensions(QPainter& p);
+    double pxPerMMOnScreen() const;
+    bool handlesVisible() const { return details_ || showPoints_ || tool_ == Tool::DrawProfile; }
 
     Document* doc_;
     View view_ = View::Original;
@@ -72,7 +79,8 @@ private:
     QPixmap origPix_, rectPix_;
     double zoom_ = 1;
     QPointF pan_;
-    bool snap_ = true, showGrid_ = true, showMask_ = true, showCand_ = false;
+    bool snap_ = true, showGrid_ = true, showMask_ = false, showCand_ = false;
+    bool details_ = false, showPoints_ = false;
 
     enum class Drag { None, Pan, Ref, Vertex };
     Drag drag_ = Drag::None;
