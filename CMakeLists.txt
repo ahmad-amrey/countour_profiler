@@ -57,3 +57,17 @@ if(CP_BUILD_TESTS)
   add_executable(cp_selftest tests/selftest.cpp)
   target_link_libraries(cp_selftest PRIVATE cpcore Qt6::Gui)
 endif()
+
+# ---------------------------------------------------------------------------
+# Tests (ctest): synthetic ground truth + real reference photos of one wire.
+# ---------------------------------------------------------------------------
+if(CP_BUILD_TESTS)
+  enable_testing()
+  add_test(NAME synthetic_ground_truth
+           COMMAND cp_selftest synth ${CMAKE_BINARY_DIR}/test-output/synth)
+  file(GLOB CP_REFERENCE_PHOTOS ${CMAKE_SOURCE_DIR}/tests/data/*.jpg)
+  if(CP_REFERENCE_PHOTOS)
+    add_test(NAME reference_photos_consistency
+             COMMAND cp_selftest consistency ${CMAKE_BINARY_DIR}/test-output/reference 10 ${CP_REFERENCE_PHOTOS})
+  endif()
+endif()

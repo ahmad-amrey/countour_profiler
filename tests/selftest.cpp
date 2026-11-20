@@ -15,8 +15,11 @@
 #include <QString>
 #include <QFileInfo>
 #include <QDir>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 
 #include "calib.h"
@@ -224,6 +227,120 @@ static int cmdSynth(const QString& outdir) {
     return failures;
 }
 
+// Shape difference of two open polylines after optimal rigid alignment
+// (arc-length correspondence, Kabsch). Tries both directions.
+static double alignedRms(const std::vector<Pt>& a, const std::vector<Pt>& b) {
+    const int N = 400;
+    auto sample = [N](const std::vector<Pt>& p) {
+        std::vector<Pt> out = resampleUniform(p, polylineLength(p, false) / (N - 1), false);
+        out.resize(size_t(N), out.empty() ? Pt() : out.back());
+        return out;
+    };
+    const std::vector<Pt> A = sample(a);
+    double best = 1e300;
+    for (int rev = 0; rev < 2; ++rev) {
+        std::vector<Pt> B = sample(b);
+        if (rev) std::reverse(B.begin(), B.end());
+        Pt ca(0, 0), cb(0, 0);
+        for (int i = 0; i < N; ++i) { ca += A[size_t(i)]; cb += B[size_t(i)]; }
+        ca = ca / N;
+        cb = cb / N;
+        double sxx = 0, sxy = 0;  // rotation angle from cross-covariance
+        for (int i = 0; i < N; ++i) {
+            const Pt p = A[size_t(i)] - ca, q = B[size_t(i)] - cb;
+            sxx += dot(p, q);
+            sxy += cross(q, p);
+        }
+        const double th = std::atan2(sxy, sxx), c = std::cos(th), s = std::sin(th);
+        // Initial alignment: B rotated about its centroid onto A's centroid.
+        std::vector<Pt> Bt(B.size());
+        for (size_t i = 0; i < B.size(); ++i) {
+            const Pt q = B[i] - cb;
+            Bt[i] = ca + Pt(c * q.x - s * q.y, s * q.x + c * q.y);
+        }
+        // ICP refinement: interior points of A (tips excluded) to nearest
+        // point on B's polyline.
+        const double tip = 1.0;  // mm
+        const double La = polylineLength(A, false);
+        std::vector<Pt> core;
+        double acc = 0;
+        for (int i = 0; i < N; ++i) {
+            if (i) acc += dist(A[size_t(i)], A[size_t(i - 1)]);
+            if (acc > tip && acc < La - tip) core.push_back(A[size_t(i)]);
+        }
+        double rms = 1e300;
+        for (int it = 0; it < 40 && core.size() > 10; ++it) {
+            std::vector<Pt> match(core.size());
+            double ss = 0;
+            for (size_t k = 0; k < core.size(); ++k) {
+                double bd = 1e300;
+                for (size_t j = 1; j < Bt.size(); ++j) {
+                    double t;
+                    const double d = pointSegmentDist(core[k], Bt[j - 1], Bt[j], &t);
+                    if (d < bd) { bd = d; match[k] = Bt[j - 1] + (Bt[j] - Bt[j - 1]) * t; }
+                }
+                ss += bd * bd;
+            }
+            rms = std::sqrt(ss / core.size());
+            // Rigid transform moving the matches onto the core points.
+            Pt cm(0, 0), cc(0, 0);
+            for (size_t k = 0; k < core.size(); ++k) { cm += match[k]; cc += core[k]; }
+            cm = cm / double(core.size());
+            cc = cc / double(core.size());
+            double a = 0, b = 0;
+            for (size_t k = 0; k < core.size(); ++k) {
+                const Pt p = core[k] - cc, q = match[k] - cm;
+                a += dot(q, p);
+                b += cross(q, p);
+            }
+            const double t2 = std::atan2(b, a), c2 = std::cos(t2), s2 = std::sin(t2);
+            for (Pt& q0 : Bt) {
+                const Pt q = q0 - cm;
+                q0 = cc + Pt(c2 * q.x - s2 * q.y, s2 * q.x + c2 * q.y);
+            }
+        }
+        best = std::min(best, rms);
+    }
+    return best;
+}
+
+// Same physical wire photographed several times: every run must succeed and
+// all profiles must agree in shape (rigid alignment) and length.
+static int cmdConsistency(const QString& outdir, double square, const QStringList& files, double maxRms) {
+    QDir().mkpath(outdir);
+    std::vector<std::vector<Pt>> profiles;
+    int failures = 0;
+    for (const QString& f : files) {
+        QImageReader rd(f);
+        rd.setAutoTransform(true);
+        const QImage q = rd.read();
+        std::printf("[%s] %dx%d\n", QFileInfo(f).fileName().toLocal8Bit().constData(), q.width(), q.height());
+        if (q.isNull()) { ++failures; continue; }
+        const ImageU8 img = fromQImage(q);
+        const RunOut r = runPipeline(img, PatternType::LineGrid, square);
+        writeOutputs(outdir + "/" + QFileInfo(f).completeBaseName(), img, r);
+        if (!r.ok) { ++failures; std::printf("  FAIL: no profile\n"); continue; }
+        profiles.push_back(r.prof.pts);
+    }
+    if (profiles.size() >= 2) {
+        std::vector<double> lens;
+        for (const auto& p : profiles) lens.push_back(polylineLength(p, false));
+        std::vector<double> sorted = lens;
+        std::sort(sorted.begin(), sorted.end());
+        const double med = sorted[sorted.size() / 2];
+        for (size_t i = 0; i < profiles.size(); ++i) {
+            const double dev = std::fabs(lens[i] - med) / med;
+            const double rms = i ? alignedRms(profiles[0], profiles[i]) : 0.0;
+            const bool ok = dev < 0.04 && rms < maxRms;
+            std::printf("  #%zu length %.2f mm (median %.2f, %+.1f%%), shape RMS vs #1 %.3f mm  %s\n", i + 1, lens[i], med,
+                        100 * (lens[i] - med) / med, rms, ok ? "ok" : "FAIL");
+            if (!ok) ++failures;
+        }
+    }
+    std::printf("%s\n", failures ? "FAIL" : "PASS");
+    return failures;
+}
+
 static int cmdRun(const QString& outdir, double square, const QStringList& files) {
     QDir().mkpath(outdir);
     int failures = 0;
@@ -258,6 +375,12 @@ int main(int argc, char** argv) {
         for (int i = 4; i < argc; ++i) files << QString::fromLocal8Bit(argv[i]);
         return cmdRun(argv[2], QString(argv[3]).toDouble(), files);
     }
-    std::printf("usage:\n  cp_selftest synth <outdir>\n  cp_selftest run <outdir> <square_mm> <image>...\n");
+    if (argc >= 6 && QString(argv[1]) == "consistency") {
+        QStringList files;
+        for (int i = 4; i < argc; ++i) files << QString::fromLocal8Bit(argv[i]);
+        return cmdConsistency(argv[2], QString(argv[3]).toDouble(), files, 0.15);
+    }
+    std::printf("usage:\n  cp_selftest synth <outdir>\n  cp_selftest run <outdir> <square_mm> <image>...\n"
+                "  cp_selftest consistency <outdir> <square_mm> <image> <image>...\n");
     return 2;
 }
