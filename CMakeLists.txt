@@ -3,6 +3,9 @@ project(ContourProfiler VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+  add_compile_options(/utf-8)  # UTF-8 sources (Arabic strings)
+endif()
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
@@ -43,6 +46,9 @@ if(CP_BUILD_GUI)
     src/app/canvas.h
     src/app/document.h
     src/app/calsheet.cpp
+    src/app/i18n.cpp
+    src/app/i18n.h
+    src/app/i18n_ar.inc
     src/app/calsheet.h
     src/app/theme.cpp
     src/app/theme.h

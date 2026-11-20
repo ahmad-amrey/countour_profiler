@@ -7,6 +7,7 @@
 #include "canvas.h"
 #include "document.h"
 #include "export.h"
+#include "i18n.h"
 
 class QCheckBox;
 class QComboBox;
@@ -33,6 +34,27 @@ public:
     void showView(bool original) { setView(original ? Canvas::View::Original : Canvas::View::Rectified); }
     void showDetails(bool on) { setDetails(on); }
     void showArcs() { setDetails(true); showArcsPage(true); }
+
+    struct Snapshot {
+        std::vector<RefPoint> refs;
+        std::vector<cp::Pt> profile;
+        bool closed;
+    };
+    // Everything needed to rebuild the window (used when switching language).
+    struct UiState {
+        Document doc;
+        std::vector<Snapshot> undo, redo;
+        bool details = false, calibrating = false, gridDetected = false, arcsPage = false;
+        double lastAutoThr = 0, margin = 2.5, colorTol = 60;
+        QColor color;
+        int pattern = 0, method = 0, sens = 50, smooth = 30, tol = 50;
+        bool outline = false, fitOn = true;
+        Canvas::View view = Canvas::View::Original;
+    };
+    UiState state() const;
+    void adopt(const UiState& st);
+    // Rebuilds the window in another language, keeping the photo and edits.
+    MainWindow* switchLanguage(i18n::Lang lang, bool offscreen = false);
 
 protected:
     void dragEnterEvent(QDragEnterEvent* e) override;
@@ -92,11 +114,6 @@ private:
     void status(const QString& msg);
 
     // Undo
-    struct Snapshot {
-        std::vector<RefPoint> refs;
-        std::vector<cp::Pt> profile;
-        bool closed;
-    };
     void pushUndo();
     void undo();
     void redo();
@@ -117,6 +134,7 @@ private:
     StartPage* start_ = nullptr;
     QPushButton* fileChip_ = nullptr;
     QPushButton* helpBtn_ = nullptr;
+    QPushButton* langBtn_ = nullptr;
     QPushButton* openBtn_ = nullptr;
     QPushButton* exportBtn_ = nullptr;
     QPushButton* moreBtn_ = nullptr;

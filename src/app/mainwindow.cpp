@@ -191,6 +191,11 @@ QWidget* MainWindow::buildHeader() {
     l->addWidget(fileChip_);
     connect(fileChip_, &QPushButton::clicked, this, &MainWindow::closeDocument);
     l->addStretch(1);
+    const i18n::Lang other = i18n::current() == i18n::Lang::Arabic ? i18n::Lang::English : i18n::Lang::Arabic;
+    langBtn_ = makeButton(i18n::nativeName(other), "ghost");
+    langBtn_->setToolTip(tr("Switch language / تغيير اللغة"));
+    l->addWidget(langBtn_);
+    connect(langBtn_, &QPushButton::clicked, this, [this, other] { switchLanguage(other); });
     helpBtn_ = makeButton(tr("How it works"), "ghost", Icon::Help, true, theme::muted);
     openBtn_ = makeButton(tr("Open…"), "ghost");
     exportBtn_ = makeButton(tr("Export DXF"), "primary", Icon::Download, true, theme::onAccent);
@@ -232,6 +237,14 @@ QWidget* MainWindow::buildHeader() {
     cand->setCheckable(true);
     connect(cand, &QAction::toggled, this, [this](bool on) { canvas_->setShowCandidates(on); });
     menu->addSeparator();
+    {
+        QMenu* lang = menu->addMenu(tr("Language"));
+        for (i18n::Lang lg : {i18n::Lang::English, i18n::Lang::Arabic}) {
+            QAction* a = lang->addAction(i18n::nativeName(lg), this, [this, lg] { switchLanguage(lg); });
+            a->setCheckable(true);
+            a->setChecked(i18n::current() == lg);
+        }
+    }
     menu->addAction(tr("How it works"), this, [this] { helpBtn_->click(); });
     menu->addAction(tr("About Contour Profiler"), this, [this] {
         QMessageBox::about(this, tr("About Contour Profiler"),
@@ -600,7 +613,8 @@ QWidget* MainWindow::buildArcsPage() {
     auto* head = new QHBoxLayout;
     head->setContentsMargins(12, 16, 12, 4);
     head->setSpacing(6);
-    auto* back = makeButton(QString(), "icon", Icon::ChevronLeft, true, theme::muted);
+    auto* back = makeButton(QString(), "icon", QApplication::isRightToLeft() ? Icon::ChevronRight : Icon::ChevronLeft,
+                            true, theme::muted);
     back->setToolTip(tr("Back to Adjust"));
     head->addWidget(back);
     head->addWidget(makeLabel(tr("Lines & arcs"), "title"), 1);
@@ -671,18 +685,20 @@ bool MainWindow::eventFilter(QObject* o, QEvent* e) {
 void MainWindow::layoutOverlays() {
     if (!stage_) return;
     const int W = stage_->width(), H = stage_->height();
+    const bool rtl = isRightToLeft();
+    auto X = [&](int x, int w) { return rtl ? W - x - w : x; };  // mirror for right-to-left
     viewSeg_->adjustSize();
-    viewSeg_->move(20, 20);
+    viewSeg_->move(X(20, viewSeg_->width()), 20);
     zoomBox_->adjustSize();
-    zoomBox_->move(W - zoomBox_->width() - 20, 20);
+    zoomBox_->move(X(W - zoomBox_->width() - 20, zoomBox_->width()), 20);
     const int cw = std::min(780, W - 40);
     resultCard_->setFixedWidth(cw);
     resultCard_->adjustSize();
     resultCard_->move((W - cw) / 2, H - resultCard_->height() - 24);
     calibCard_->adjustSize();
-    calibCard_->move(24, 24);
+    calibCard_->move(X(24, calibCard_->width()), 24);
     hint_->adjustSize();
-    hint_->move(20, H - hint_->height() - 20);
+    hint_->move(X(20, hint_->width()), H - hint_->height() - 20);
     if (dim_ && centralWidget()) dim_->setGeometry(centralWidget()->rect());
 }
 
@@ -813,6 +829,95 @@ void MainWindow::printSheet() {
                              tr("Saved %1.\n\nPrint it at 100 % (\"Actual size\", no scaling) and check that the bar "
                                 "at the bottom measures 100 mm.")
                                  .arg(QFileInfo(fn).fileName()));
+}
+
+MainWindow::UiState MainWindow::state() const {
+    UiState s;
+    s.doc = doc_;
+    s.undo = undo_;
+    s.redo = redo_;
+    s.details = details_;
+    s.calibrating = calibrating_;
+    s.gridDetected = gridDetected_;
+    s.arcsPage = panelStack_->currentIndex() == 1;
+    s.lastAutoThr = lastAutoThr_;
+    s.margin = marginSpin_->value();
+    s.colorTol = colorTolSpin_->value();
+    s.color = pickedColor_;
+    s.pattern = patternCombo_->currentIndex();
+    s.method = methodSeg_->index();
+    s.sens = sensSlider_->value();
+    s.smooth = smoothSlider_->value();
+    s.tol = tolSlider_->value();
+    s.outline = outlineCheck_->isChecked();
+    s.fitOn = fitCheck_->isChecked();
+    s.view = canvas_->view();
+    return s;
+}
+
+void MainWindow::adopt(const UiState& st) {
+    doc_ = st.doc;
+    undo_ = st.undo;
+    redo_ = st.redo;
+    gridDetected_ = st.gridDetected;
+    lastAutoThr_ = st.lastAutoThr;
+    pickedColor_ = st.color.isValid() ? st.color : pickedColor_;
+    {
+        const QSignalBlocker b1(patternCombo_), b2(squareSpin_), b3(sensSlider_), b4(smoothSlider_),
+            b5(tolSlider_), b6(tolSlider2_), b7(marginSpin_), b8(colorTolSpin_), b9(outlineCheck_), b10(fitCheck_);
+        patternCombo_->setCurrentIndex(st.pattern);
+        squareSpin_->setValue(doc_.squareMM);
+        sensSlider_->setValue(st.sens);
+        smoothSlider_->setValue(st.smooth);
+        tolSlider_->setValue(st.tol);
+        tolSlider2_->setValue(st.tol);
+        marginSpin_->setValue(st.margin);
+        colorTolSpin_->setValue(st.colorTol);
+        outlineCheck_->setChecked(st.outline);
+        fitCheck_->setChecked(st.fitOn);
+    }
+    methodSeg_->setIndex(st.method);
+    colorRow_->setVisible(st.method == 1);
+    sensSlider_->parentWidget()->setVisible(st.method == 0);
+    start_->setSquare(doc_.squareMM);
+    canvas_->imageChanged();
+    canvas_->rectifiedChanged();
+    if (doc_.hasImage()) {
+        pages_->setCurrentIndex(1);
+        setWindowTitle(tr("Contour Profiler - %1").arg(QFileInfo(doc_.path).fileName()));
+    }
+    updateRefTable();
+    refit();
+    calibrating_ = st.calibrating;
+    if (calibrating_) {
+        calibCard_->setCount(int(doc_.refs.size()));
+        canvas_->setTool(Canvas::Tool::AddRef);
+    }
+    setDetails(st.details);
+    if (st.details && st.arcsPage) showArcsPage(true);
+    setView(st.view);
+    updateAll();
+}
+
+MainWindow* MainWindow::switchLanguage(i18n::Lang lang, bool offscreen) {
+    if (lang == i18n::current()) return this;
+    const UiState st = state();
+    const bool maximized = isMaximized();
+    const QRect geom = geometry();
+    i18n::apply(lang);
+    auto* w = new MainWindow;
+    w->setAttribute(Qt::WA_DeleteOnClose);
+    if (offscreen) w->setAttribute(Qt::WA_DontShowOnScreen, true);
+    w->adopt(st);
+    if (maximized) {
+        w->showMaximized();
+    } else {
+        w->setGeometry(geom);
+        w->show();
+    }
+    setAttribute(Qt::WA_DeleteOnClose);
+    close();
+    return w;
 }
 
 void MainWindow::changeSquareSize() {
@@ -1141,8 +1246,8 @@ void MainWindow::exportDialog(int format) {
     const QString geo = doc_.segs.empty() ? tr("%1 points").arg(doc_.profile.size())
                                           : geometrySummary(na, nl, " · ");
     ExportDialog dlg(this, doc_.profile, doc_.segs, doc_.closed,
-                     QString("%1 × %2 mm").arg(x1 - x0, 0, 'f', 1).arg(y1 - y0, 0, 'f', 1),
-                     QString("%1 mm").arg(len, 0, 'f', 1), geo, format);
+                     tr("%1 × %2 mm").arg(x1 - x0, 0, 'f', 1).arg(y1 - y0, 0, 'f', 1),
+                     tr("%1 mm").arg(len, 0, 'f', 1), geo, format);
     dim_->setGeometry(centralWidget()->rect());
     dim_->raise();
     dim_->show();
@@ -1289,7 +1394,7 @@ void MainWindow::updateSegList() {
     for (size_t i = 0; i < doc_.segs.size(); ++i) {
         const auto& s = doc_.segs[i];
         const QString dims = s.arc ? QString("R %1 · %2°").arg(s.r, 0, 'f', 2).arg(std::fabs(s.sweep) * 57.29577951308232, 0, 'f', 0)
-                                   : QString("%1 mm").arg(s.length(), 0, 'f', 2);
+                                   : tr("%1 mm").arg(s.length(), 0, 'f', 2);
         auto* it = new QListWidgetItem(QString("%1\t%2").arg(s.arc ? tr("Arc") : tr("Line"), dims));
         QPixmap sw(22, 10);
         sw.fill(Qt::transparent);
@@ -1311,16 +1416,16 @@ void MainWindow::updateSegList() {
 void MainWindow::updatePanel() {
     if (!calStatus_) return;
     if (doc_.cal.ok)
-        calStatus_->setText(QString("<span style='color:#46C38A'>&#10003;</span> %1 points · ±%2 mm")
+        calStatus_->setText(QString("<span style='color:#46C38A'>&#10003;</span> ") + tr("%1 points · ±%2 mm")
                                 .arg(doc_.refs.size())
                                 .arg(doc_.cal.rmsMM, 0, 'f', 2));
     else
         calStatus_->setText(QString("<span style='color:#F2B544'>&#9888;</span> %1").arg(tr("not calibrated")));
     sensValue_->setText(sensSlider_->value() == 50 ? tr("Auto") : QString::number(threshold(), 'f', 0));
-    smoothValue_->setText(QString("%1 mm").arg(smoothSlider_->value() / 100.0, 0, 'f', 2));
+    smoothValue_->setText(tr("%1 mm").arg(smoothSlider_->value() / 100.0, 0, 'f', 2));
     colorBtn_->setStyleSheet(QString("background: %1; border: 1px solid #3A404A; border-radius: 8px; min-height: 28px;")
                                  .arg(pickedColor_.name()));
-    const QString tol = QString("%1 mm").arg(doc_.fitTol, 0, 'f', doc_.fitTol < 0.1 ? 3 : 2);
+    const QString tol = tr("%1 mm").arg(doc_.fitTol, 0, 'f', doc_.fitTol < 0.1 ? 3 : 2);
     tolValue_->setText(tol);
     tolValue2_->setText(tol);
     int na = 0, nl = 0;
@@ -1344,7 +1449,7 @@ void MainWindow::updateResultCard() {
         if (doc_.segs.empty()) len = cp::polylineLength(doc_.profile, doc_.closed);
         title = tr("Profile ready");
         summary = doc_.segs.empty() ? tr("%1 mm long").arg(len, 0, 'f', 1)
-                                    : tr("%1 mm long · %2").arg(len, 0, 'f', 1).arg(geometrySummary(na, nl, ", "));
+                                    : tr("%1 mm long · %2").arg(len, 0, 'f', 1).arg(geometrySummary(na, nl, tr(", ")));
     } else {
         title = doc_.cal.ok ? tr("No wire found") : tr("Not calibrated");
         summary = doc_.cal.ok ? tr("Adjust › click the wire, or pick its colour") : tr("Click 4 corners of a known rectangle");

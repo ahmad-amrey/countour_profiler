@@ -353,7 +353,7 @@ void Canvas::paintEvent(QPaintEvent*) {
         p.drawLine(a, a + QPointF(L, 0));
         p.setPen(QPen(theme::text, 2.5, Qt::SolidLine, Qt::FlatCap));
         p.drawLine(a, a + QPointF(L, 0));
-        p.drawText(QRectF(a.x() - 20, a.y() - 22, L + 40, 16), Qt::AlignCenter, QString("%1 mm").arg(mm));
+        p.drawText(QRectF(a.x() - 20, a.y() - 22, L + 40, 16), Qt::AlignCenter, tr("%1 mm").arg(mm));
     }
 }
 
@@ -403,8 +403,8 @@ void Canvas::drawDimensions(QPainter& p) {
     p.drawLine(QPointF(xH, c.y()), QPointF(xH, b.y()));
     p.drawLine(QPointF(xH - 6, c.y()), QPointF(xH + 6, c.y()));
     p.drawLine(QPointF(xH - 6, b.y()), QPointF(xH + 6, b.y()));
-    label(QPointF((a.x() + b.x()) / 2, yW), QString("%1 mm").arg(x1 - x0, 0, 'f', 1));
-    label(QPointF(xH, (c.y() + b.y()) / 2), QString("%1 mm").arg(y1 - y0, 0, 'f', 1));
+    label(QPointF((a.x() + b.x()) / 2, yW), tr("%1 mm").arg(x1 - x0, 0, 'f', 1));
+    label(QPointF(xH, (c.y() + b.y()) / 2), tr("%1 mm").arg(y1 - y0, 0, 'f', 1));
 }
 
 // --- interaction -------------------------------------------------------------

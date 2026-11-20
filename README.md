@@ -127,6 +127,19 @@ Shortcuts:
 
 Command line: `ContourProfiler [photo]`
 
+## Languages
+
+English and **Arabic (العربية)**, with a full right-to-left layout. Switch with
+the language button in the header, or ⋯ › Language. The switch is instant:
+the open photo, edits and settings are kept, and the choice is remembered.
+
+To add or update a language, edit the string table (`src/app/i18n_ar.inc` for
+Arabic) and check coverage:
+
+```bash
+python tools/check_translations.py .
+```
+
 ## Building
 
 Requirements: a C++17 compiler, CMake ≥ 3.16 and Qt 6 (Core, Gui, Widgets).

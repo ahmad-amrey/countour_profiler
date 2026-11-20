@@ -12,7 +12,7 @@ namespace theme {
 QFont uiFont(int px, int weight) {
     QFont f;
     f.setFamilies({"Inter", "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans",
-                   "Cantarell", "Arial"});
+                   "Noto Sans Arabic", "Geeza Pro", "Tahoma", "Cantarell", "Arial"});
     f.setPixelSize(px);
     f.setWeight(QFont::Weight(weight));
     f.setHintingPreference(QFont::PreferNoHinting);

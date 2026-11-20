@@ -211,7 +211,7 @@ StartPage::StartPage(QWidget* parent) : QWidget(parent) {
     outer->addStretch(1);
 }
 
-void StartPage::setSquare(double mm) { squareValue_->setText(QString("%1 mm").arg(mm, 0, 'g', 4)); }
+void StartPage::setSquare(double mm) { squareValue_->setText(tr("%1 mm").arg(mm, 0, 'g', 4)); }
 
 void StartPage::setDropHover(bool on) {
     drop_->setProperty("hover", on);

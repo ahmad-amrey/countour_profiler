@@ -4,6 +4,7 @@
 #include <QTimer>
 
 #include "mainwindow.h"
+#include "i18n.h"
 #include "theme.h"
 #include "widgets.h"
 
@@ -25,10 +26,18 @@ int main(int argc, char** argv) {
     QCommandLineOption tierOpt("tier", "Tier for --screenshot: simple | details | arcs.", "tier", "simple");
     cli.addOption(shotOpt);
     cli.addOption(viewOpt);
+    QCommandLineOption langOpt("lang", "UI language for this run: en | ar (not saved).", "lang");
     cli.addOption(tierOpt);
+    cli.addOption(langOpt);
     cli.process(app);
+    if (cli.isSet(langOpt))
+        i18n::apply(cli.value(langOpt) == "ar" ? i18n::Lang::Arabic : i18n::Lang::English, false);
+    else
+        i18n::apply(i18n::saved(), false);
 
-    MainWindow w;
+    auto* wp = new MainWindow;  // replaced by a new window when the language changes
+    wp->setAttribute(Qt::WA_DeleteOnClose);
+    MainWindow& w = *wp;
     if (cli.isSet(shotOpt)) {
         w.setAttribute(Qt::WA_DontShowOnScreen, true);  // render without a visible window
         w.resize(1440, 900);
@@ -42,6 +51,18 @@ int main(int argc, char** argv) {
         QTimer::singleShot(300, &w, [&w, file, orig, tier] {
             if (tier == "details") w.showDetails(true);
             if (tier == "arcs") w.showArcs();
+            if (tier == "switch") {
+                // Open details, then switch language live and capture the new window.
+                w.showDetails(true);
+                MainWindow* nw = w.switchLanguage(
+                    i18n::current() == i18n::Lang::Arabic ? i18n::Lang::English : i18n::Lang::Arabic, true);
+                nw->resize(1440, 900);
+                QTimer::singleShot(400, nw, [nw, file] {
+                    nw->grab().save(file);
+                    QApplication::quit();
+                });
+                return;
+            }
             if (tier == "print") {
                 auto* dlg = new PrintSheetDialog(&w, 10);
                 dlg->setAttribute(Qt::WA_DontShowOnScreen, true);
