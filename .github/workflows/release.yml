@@ -1,0 +1,173 @@
+name: release
+
+# Publishes a GitHub Release with ready-to-run downloads when a version tag
+# is pushed:  git tag v0.3.0 && git push origin v0.3.0
+# The tag must match project(VERSION) in CMakeLists.txt.
+# "Run workflow" (manual) builds the packages as run artifacts without
+# publishing a release, to try the packaging.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Read and check the version
+        run: |
+          version=$(sed -nE 's/^project\(ContourProfiler VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)
+          echo "CMake version: $version"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match project(VERSION $version) in CMakeLists.txt"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-qt6-translations
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          name="ContourProfiler-${{ needs.version.outputs.version }}-windows-x64"
+          mkdir -p "$name/translations"
+          cp build/ContourProfiler.exe "$name/"
+          windeployqt6 --release --no-translations "$name/ContourProfiler.exe"
+          # windeployqt copies Qt itself; also bring every other MinGW DLL that
+          # the exe, Qt and its plugins depend on (ICU, zlib, freetype, ...).
+          for pass in 1 2 3; do
+            find "$name" -name '*.exe' -o -name '*.dll' | xargs ldd 2>/dev/null \
+              | awk '/\/mingw64\// {print $3}' | sort -u | xargs -r -I{} cp -n {} "$name/"
+          done
+          cp /mingw64/share/qt6/translations/qtbase_ar.qm "$name/translations/" || true
+          cp LICENSE README.md "$name/"
+          zip -r -9 "$name.zip" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ContourProfiler-*-windows-x64.zip
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install qt ninja
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          name="ContourProfiler-${{ needs.version.outputs.version }}-macos-$(uname -m)"
+          app="build/ContourProfiler.app"
+          mkdir -p "$app/Contents/MacOS/translations"
+          cp "$(brew --prefix qt)/share/qt/translations/qtbase_ar.qm" "$app/Contents/MacOS/translations/" || true
+          "$(brew --prefix qt)/bin/macdeployqt" "$app"
+          # Ad-hoc signature (required to run on Apple Silicon); not notarised.
+          codesign --force --deep --sign - "$app"
+          mkdir dmg && cp -R "$app" "dmg/Contour Profiler.app" && ln -s /Applications dmg/Applications
+          hdiutil create -volname "Contour Profiler" -srcfolder dmg -ov -format UDZO "$name.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: ContourProfiler-*-macos-*.dmg
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build qt6-base-dev qmake6 libgl1-mesa-dev \
+            libxkbcommon-x11-0 libxcb-cursor0 file
+      - name: Build and test
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Package (AppImage)
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          QMAKE: /usr/lib/qt6/bin/qmake
+        run: |
+          DESTDIR=AppDir cmake --install build
+          base=https://github.com/linuxdeploy
+          wget -q "$base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
+          wget -q "$base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage"
+          chmod +x linuxdeploy*.AppImage
+          export OUTPUT="ContourProfiler-${{ needs.version.outputs.version }}-linux-x86_64.AppImage"
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage \
+            --desktop-file AppDir/usr/share/applications/contour-profiler.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/contour-profiler.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: ContourProfiler-*-linux-x86_64.AppImage
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [version, windows, macos, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Downloads
+
+          | Platform | File | How to start |
+          |---|---|---|
+          | Windows 10/11 (64-bit) | `…-windows-x64.zip` | Unzip anywhere and run `ContourProfiler.exe`. |
+          | macOS (Apple Silicon) | `…-macos-arm64.dmg` | Open the disk image and drag *Contour Profiler* to Applications. |
+          | Linux (x86-64, recent distributions) | `…-linux-x86_64.AppImage` | `chmod +x` the file, then run it. |
+
+          The builds are not code-signed yet, so the first start shows a warning:
+          - **Windows:** SmartScreen "Windows protected your PC" → *More info* → *Run anyway*.
+          - **macOS:** right-click the app → *Open* → *Open* (only needed once).
+
+          No cutting mat? Print the [calibration sheet](https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}/docs).
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Contour Profiler ${{ needs.version.outputs.version }}" \
+            --notes-file notes.md --generate-notes --verify-tag

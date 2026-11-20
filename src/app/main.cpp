@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Contour Profiler");
     QApplication::setOrganizationName("ContourProfiler");
-    QApplication::setApplicationVersion("0.3.0");
+    QApplication::setApplicationVersion(QStringLiteral(CP_VERSION));
     {
         QIcon appIcon;  // window, taskbar and dock icon
         for (int s : {16, 32, 48, 64, 128, 256, 512}) appIcon.addFile(QString(":/icons/icon_%1.png").arg(s), QSize(s, s));

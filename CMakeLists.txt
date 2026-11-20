@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
-project(ContourProfiler VERSION 0.1.0 LANGUAGES CXX)
+# The single source of the version number: the app, the Windows file details
+# and the release workflow (which checks the git tag) all read it from here.
+project(ContourProfiler VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +45,8 @@ if(CP_BUILD_GUI)
   # Qt resources for the window icon on every platform.
   set(CP_PLATFORM_RESOURCES)
   if(WIN32)
-    list(APPEND CP_PLATFORM_RESOURCES resources/app.rc)
+    configure_file(resources/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+    list(APPEND CP_PLATFORM_RESOURCES ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
   elseif(APPLE)
     list(APPEND CP_PLATFORM_RESOURCES resources/icon.icns)
     set_source_files_properties(resources/icon.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
@@ -68,6 +71,7 @@ if(CP_BUILD_GUI)
     src/app/widgets.h
   )
   target_link_libraries(ContourProfiler PRIVATE cpcore Qt6::Widgets)
+  target_compile_definitions(ContourProfiler PRIVATE CP_VERSION="${PROJECT_VERSION}")
   set_target_properties(ContourProfiler PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER org.contourprofiler.app
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}

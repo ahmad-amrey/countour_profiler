@@ -58,6 +58,21 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
 > **DWG:** DWG is a closed Autodesk format. Open the DXF in your CAD program and
 > *Save As* DWG, or batch-convert with the free ODA File Converter.
 
+## Download
+
+Ready-to-run builds are on the
+[**Releases**](https://github.com/ahmad-amrey/countour_profiler/releases) page:
+
+| Platform | File | How to start |
+|---|---|---|
+| Windows 10/11 (64-bit) | `ContourProfiler-…-windows-x64.zip` | Unzip anywhere and run `ContourProfiler.exe`. |
+| macOS (Apple Silicon) | `ContourProfiler-…-macos-arm64.dmg` | Open it and drag *Contour Profiler* to Applications. |
+| Linux (x86-64, recent distributions) | `ContourProfiler-…-linux-x86_64.AppImage` | `chmod +x` the file, then run it. |
+
+The builds are not code-signed yet, so the first start shows a warning. On
+Windows, SmartScreen says "Windows protected your PC": click *More info* →
+*Run anyway*. On macOS, right-click the app → *Open* → *Open* (only once).
+
 ## No cutting mat? Print the sheet
 
 Print [`docs/calibration_sheet_10mm_A4.pdf`](docs/calibration_sheet_10mm_A4.pdf)
@@ -180,6 +195,24 @@ macdeployqt build/ContourProfiler.app    # optional: self-contained bundle
 
 CMake options: `-DCP_BUILD_GUI=OFF` builds only the core and the tests;
 `-DCP_BUILD_TESTS=OFF` skips the tests.
+
+## Making a release
+
+1. Set the new version in `CMakeLists.txt` (`project(ContourProfiler VERSION x.y.z ...)`)
+   and commit. The app, the Windows file details and the release all read it
+   from there.
+2. Tag the commit with the same version and push the tag:
+
+   ```bash
+   git tag v0.3.0
+   git push origin v0.3.0
+   ```
+
+The `release` workflow checks that the tag matches the version, builds and
+tests on all three platforms, packages a Windows zip, a macOS disk image and a
+Linux AppImage, and publishes them as a GitHub Release. To try the packaging
+without releasing, run the workflow manually from the Actions tab; the packages
+appear as run artifacts.
 
 ## Tests and accuracy
 

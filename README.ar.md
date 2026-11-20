@@ -61,6 +61,21 @@
 > الرسم الهندسي واحفظه بصيغة DWG، أو حوّل عدة ملفات دفعة واحدة باستخدام
 > برنامج ODA File Converter المجاني.
 
+## التنزيل
+
+النسخ الجاهزة للتشغيل موجودة في صفحة
+[**الإصدارات (Releases)**](https://github.com/ahmad-amrey/countour_profiler/releases):
+
+| المنصة | الملف | طريقة التشغيل |
+|---|---|---|
+| Windows 10/11 (64 بت) | `ContourProfiler-…-windows-x64.zip` | فك الضغط في أي مكان وشغّل `ContourProfiler.exe`. |
+| macOS (معالجات Apple Silicon) | `ContourProfiler-…-macos-arm64.dmg` | افتحه واسحب *Contour Profiler* إلى مجلد التطبيقات. |
+| Linux (x86-64، التوزيعات الحديثة) | `ContourProfiler-…-linux-x86_64.AppImage` | امنح الملف صلاحية التشغيل (`chmod +x`) ثم شغّله. |
+
+النسخ غير موقّعة رقميًا بعد، لذا يظهر تحذير عند أول تشغيل. في Windows تظهر رسالة
+SmartScreen «Windows protected your PC»: انقر *More info* ثم *Run anyway*. وفي
+macOS انقر على التطبيق بالزر الأيمن ثم *Open* ثم *Open* (مرة واحدة فقط).
+
 ## ليس لديك لوح قص؟ اطبع الورقة
 
 اطبع [`docs/calibration_sheet_10mm_A4.pdf`](docs/calibration_sheet_10mm_A4.pdf)
@@ -197,6 +212,27 @@ macdeployqt build/ContourProfiler.app    # optional: self-contained bundle
 
 خيارات CMake: الخيار `-DCP_BUILD_GUI=OFF` يبني النواة والاختبارات فقط، والخيار
 `-DCP_BUILD_TESTS=OFF` يتخطى الاختبارات.
+
+## إصدار نسخة جديدة
+
+1. حدّد رقم الإصدار الجديد في `CMakeLists.txt`
+   (`project(ContourProfiler VERSION x.y.z ...)`) واحفظ التغيير (commit). يقرأ
+   البرنامج وتفاصيل ملف Windows والإصدار الرقم من هناك.
+2. ضع على الـcommit وسمًا (tag) بالرقم نفسه وادفعه:
+
+<div dir="ltr">
+
+```bash
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+</div>
+
+يتحقق مسار العمل `release` من تطابق الوسم مع رقم الإصدار، ثم يبني البرنامج
+ويختبره على المنصات الثلاث، ويحزّم ملف zip لنظام Windows وصورة قرص لنظام macOS
+وملف AppImage لنظام Linux، وينشرها كإصدار على GitHub. ولتجربة التحزيم دون نشر
+إصدار، شغّل مسار العمل يدويًا من تبويب Actions، فتظهر الحزم كملفات مرفقة بالتشغيل.
 
 ## الاختبارات والدقة
 
