@@ -4,9 +4,11 @@
 
 # Contour Profiler
 
-Capture real-world 2D profiles (mouldings, pipes, curved edges, tool shapes...)
-with nothing more than a piece of wire, a square pattern and a phone camera,
-and get a dimensionally correct **DXF** for CAD.
+Copy the cross-section of any real object into CAD. Bend a wire around the
+shape, lay it on a grid and take a photo from any angle: you get an accurate 2D
+drawing as a **DXF**. It's a quick replacement for a profile gauge and calipers
+when you need the profile of a moulding, pipe, curved edge, tool or any other
+part.
 
 ![Contour Profiler: a photo of a bent wire on a cutting mat, perspective-corrected and traced](docs/screenshot.jpg)
 
