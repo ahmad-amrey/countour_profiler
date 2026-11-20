@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QImageReader>
 #include <QTimer>
 
@@ -12,7 +13,12 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Contour Profiler");
     QApplication::setOrganizationName("ContourProfiler");
-    QApplication::setApplicationVersion("0.2.0");
+    QApplication::setApplicationVersion("0.3.0");
+    {
+        QIcon appIcon;  // window, taskbar and dock icon
+        for (int s : {16, 32, 48, 64, 128, 256, 512}) appIcon.addFile(QString(":/icons/icon_%1.png").arg(s), QSize(s, s));
+        QApplication::setWindowIcon(appIcon);
+    }
     QImageReader::setAllocationLimit(1024);  // MB; phone photos can exceed the 256 MB default
     theme::apply();
 
@@ -59,16 +65,6 @@ int main(int argc, char** argv) {
                 nw->resize(1440, 900);
                 QTimer::singleShot(400, nw, [nw, file] {
                     nw->grab().save(file);
-                    QApplication::quit();
-                });
-                return;
-            }
-            if (tier == "print") {
-                auto* dlg = new PrintSheetDialog(&w, 10);
-                dlg->setAttribute(Qt::WA_DontShowOnScreen, true);
-                dlg->show();
-                QTimer::singleShot(250, &w, [dlg, file] {
-                    dlg->grab().save(file);
                     QApplication::quit();
                 });
                 return;

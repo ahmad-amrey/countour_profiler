@@ -38,7 +38,19 @@ target_link_libraries(cpcore PUBLIC Threads::Threads)
 # ---------------------------------------------------------------------------
 if(CP_BUILD_GUI)
   set(CMAKE_AUTOMOC ON)
+  set(CMAKE_AUTORCC ON)
+  # Application icon: Windows resource (.ico in the .exe), macOS bundle icon,
+  # Qt resources for the window icon on every platform.
+  set(CP_PLATFORM_RESOURCES)
+  if(WIN32)
+    list(APPEND CP_PLATFORM_RESOURCES resources/app.rc)
+  elseif(APPLE)
+    list(APPEND CP_PLATFORM_RESOURCES resources/icon.icns)
+    set_source_files_properties(resources/icon.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  endif()
   add_executable(ContourProfiler WIN32 MACOSX_BUNDLE
+    resources/resources.qrc
+    ${CP_PLATFORM_RESOURCES}
     src/app/main.cpp
     src/app/mainwindow.cpp
     src/app/mainwindow.h
@@ -59,8 +71,16 @@ if(CP_BUILD_GUI)
   set_target_properties(ContourProfiler PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER org.contourprofiler.app
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    MACOSX_BUNDLE_ICON_FILE icon.icns)
   install(TARGETS ContourProfiler BUNDLE DESTINATION . RUNTIME DESTINATION bin)
+  if(UNIX AND NOT APPLE)
+    install(FILES resources/contour-profiler.desktop DESTINATION share/applications)
+    foreach(sz 16 32 48 64 128 256 512)
+      install(FILES resources/icon_${sz}.png DESTINATION share/icons/hicolor/${sz}x${sz}/apps
+              RENAME contour-profiler.png)
+    endforeach()
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------

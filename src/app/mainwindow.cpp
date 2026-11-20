@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
+#include <QDesktopServices>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
@@ -29,12 +30,14 @@
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <functional>
 
+#include "calsheet.h"
 #include "profile_detect.h"
 #include "synth.h"
 #include "theme.h"
@@ -181,7 +184,7 @@ QWidget* MainWindow::buildHeader() {
     l->setContentsMargins(20, 0, 12, 0);
     l->setSpacing(10);
     auto* logo = new QLabel;
-    logo->setPixmap(theme::pixmap(Icon::Logo, theme::accent, 26, devicePixelRatioF()));
+    logo->setPixmap(QApplication::windowIcon().pixmap(QSize(28, 28), devicePixelRatioF()));
     l->addWidget(logo);
     l->addWidget(makeLabel(tr("Contour Profiler"), "title"));
     l->addSpacing(8);
@@ -799,36 +802,23 @@ void MainWindow::closeDocument() {
 }
 
 void MainWindow::printSheet() {
-    PrintSheetDialog dlg(this, doc_.squareMM);
-    dim_->setGeometry(centralWidget()->rect());
-    dim_->raise();
-    dim_->show();
-    dlg.adjustSize();
-    dlg.move(mapToGlobal(QPoint((width() - dlg.width()) / 2, std::max(40, (height() - dlg.height()) / 2 - 20))));
-    const int res = dlg.exec();
-    dim_->hide();
-    if (res != QDialog::Accepted) return;
-    const SheetOptions o = dlg.options();
-    const QString def = QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
-                            .filePath(QString("calibration_%1mm_%2.pdf")
-                                          .arg(o.squareMM, 0, 'g', 4)
-                                          .arg(o.checkerboard ? "checkerboard" : (o.dark ? "grid_dark" : "grid")));
-    const QString fn = QFileDialog::getSaveFileName(this, tr("Save calibration sheet"), def, tr("PDF (*.pdf)"));
-    if (fn.isEmpty()) return;
-    QString err;
-    if (!writeSheetPdf(fn, o, &err)) {
-        QMessageBox::warning(this, tr("Calibration sheet"), err);
+    // One fixed sheet: black 10 mm lines on white paper, opened in the PDF
+    // viewer for printing. Letter in North America, A4 elsewhere.
+    const QPageSize::PageSizeId page = localPaperSize();
+    const QString name = page == QPageSize::Letter ? "calibration_sheet_10mm_Letter.pdf" : "calibration_sheet_10mm_A4.pdf";
+    const QString path = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).filePath(name);
+    if (!writeSheetPdf(path, page)) {
+        QMessageBox::warning(this, tr("Calibration sheet"), tr("Cannot write %1").arg(path));
         return;
     }
-    if (std::fabs(o.squareMM - doc_.squareMM) > 1e-9) {
-        doc_.squareMM = o.squareMM;
-        squareSpin_->setValue(o.squareMM);
-        start_->setSquare(o.squareMM);
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(path))) {
+        const QString fn = QFileDialog::getSaveFileName(this, tr("Save calibration sheet"),
+                                                        QDir::home().filePath(name), tr("PDF (*.pdf)"));
+        if (!fn.isEmpty()) {
+            QFile::remove(fn);
+            QFile::copy(path, fn);
+        }
     }
-    QMessageBox::information(this, tr("Calibration sheet"),
-                             tr("Saved %1.\n\nPrint it at 100 % (\"Actual size\", no scaling) and check that the bar "
-                                "at the bottom measures 100 mm.")
-                                 .arg(QFileInfo(fn).fileName()));
 }
 
 MainWindow::UiState MainWindow::state() const {

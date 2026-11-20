@@ -1,21 +1,17 @@
-// Printable calibration sheets (line grid or checkerboard) that the detector
-// reads reliably. Drawn with QPainter, so the same code renders the PDF and
-// preview/test images.
+// The printable calibration sheet: black 10 mm lines on white paper, which the
+// detector reads reliably. Drawn with QPainter, so the same code renders the
+// PDF and test images.
 #pragma once
 #include <QImage>
 #include <QPageSize>
 #include <QString>
 
-struct SheetOptions {
-    bool checkerboard = false;
-    bool dark = false;          // light lines on black (best for silver wire); line grid only
-    double squareMM = 10;
-    QPageSize::PageSizeId page = QPageSize::A4;
-    bool landscape = false;
-};
+constexpr double kSheetSquareMM = 10.0;
 
-QSizeF sheetSizeMM(const SheetOptions& o);
+QSizeF sheetSizeMM(QPageSize::PageSizeId page);
 // Draws the whole page; the painter is set up so 1 unit = 1 mm.
-void drawSheet(class QPainter& p, const SheetOptions& o);
-bool writeSheetPdf(const QString& path, const SheetOptions& o, QString* error = nullptr);
-QImage renderSheet(const SheetOptions& o, double pxPerMM);
+void drawSheet(class QPainter& p, QPageSize::PageSizeId page);
+bool writeSheetPdf(const QString& path, QPageSize::PageSizeId page);
+QImage renderSheet(QPageSize::PageSizeId page, double pxPerMM);
+// US Letter in North America, A4 elsewhere.
+QPageSize::PageSizeId localPaperSize();

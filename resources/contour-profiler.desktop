@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Contour Profiler
+Name[ar]=Contour Profiler
+Comment=2D profiles from photos of a bent wire on a grid, exported as DXF
+Comment[ar]=مقاطع ثنائية الأبعاد من صور سلك مثنيّ على شبكة، تُصدَّر كملف DXF
+Exec=ContourProfiler %f
+Icon=contour-profiler
+Terminal=false
+Categories=Graphics;Engineering;
+MimeType=image/jpeg;image/png;image/tiff;image/bmp;image/webp;

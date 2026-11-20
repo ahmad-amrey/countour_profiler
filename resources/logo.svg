@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Contour Profiler">
+  <defs><clipPath id="tile"><rect x="64" y="64" width="896" height="896" rx="216"/></clipPath></defs>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="#16181C" stroke="#2E333C" stroke-width="10"/>
+  <g clip-path="url(#tile)" stroke="#5AA9FF" stroke-opacity="0.12" stroke-width="7" fill="none"><path d="M92 64 V960 M64 92 H960"/><path d="M260 64 V960 M64 260 H960"/><path d="M428 64 V960 M64 428 H960"/><path d="M596 64 V960 M64 596 H960"/><path d="M764 64 V960 M64 764 H960"/><path d="M932 64 V960 M64 932 H960"/></g>
+  <path d="M 368 812 L 306 402 C 290 300, 342 256, 414 256 C 566 256, 704 334, 730 476 L 740 812" fill="none" stroke="#FF8A3D" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="368" cy="812" r="39" fill="#FF8A3D"/>
+  <circle cx="740" cy="812" r="39" fill="#FF8A3D"/>
+</svg>

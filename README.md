@@ -48,21 +48,13 @@ Cross-platform C++17 + Qt 6 (Windows, macOS, Linux). The image-processing core
 > **DWG:** DWG is a closed Autodesk format. Open the DXF in your CAD program and
 > *Save As* DWG, or batch-convert with the free ODA File Converter.
 
-## No cutting mat? Print a sheet
+## No cutting mat? Print the sheet
 
-On the start screen, choose *Print a calibration sheet* (also in the ⋯ menu).
-It generates a PDF (A4, US Letter or A3) with exact squares that the detector
-reads automatically. There are three variants:
-
-- **Line grid, white paper:** saves ink. Use a dark or coloured wire.
-- **Line grid, dark paper:** light lines on black, like a cutting mat. This gives
-  the best contrast for silver or shiny wire.
-- **Checkerboard:** use a copper or coloured wire, because silver disappears on
-  the white squares.
-
-Print at **100 % / Actual size**, with no "fit to page". The 100 mm bar on the
-sheet lets you check the printed scale; if it is off, enter the measured square
-size in the app.
+Print [`docs/calibration_sheet_10mm_A4.pdf`](docs/calibration_sheet_10mm_A4.pdf)
+(or the [US Letter](docs/calibration_sheet_10mm_Letter.pdf) version) at
+**100 % / Actual size**. *Print a calibration sheet* on the start screen opens
+it for you. The 100 mm bar on the sheet lets you check the printed scale. For
+any other grid, use your own and enter its square size in the app.
 
 ## Taking good photos
 
@@ -181,7 +173,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 - **`line_arc_fitting`**: known lines and arcs, sampled as a dense noisy trace and as a few hand-placed clicks, must come back with the same structure and radii (within 0.1 mm), and arcs must round-trip through the DXF bulges.
-- **`printed_calibration_sheets`**: each printable sheet (white grid, dark grid, checkerboard) is rendered with a wire on it and photographed in perspective. The pipeline must find the grid and recover the wire with a shape RMS below 0.15 mm; currently 0.05–0.06 mm.
+- **`printed_calibration_sheets`**: the printable sheet (A4 and Letter) is rendered with a wire on it and photographed in perspective. The pipeline must recover the wire with a shape RMS below 0.15 mm.
 - **`synthetic_ground_truth`**: renders perspective photos with known geometry
   (bright and dark line grids, a checkerboard, noise, vignetting) and compares
   the result with the ground truth.
@@ -241,11 +233,21 @@ The `tests/data` images were re-encoded without any metadata (no EXIF/GPS).
 5. **Export** (`export.cpp`): DXF R12 POLYLINE entities with bulges for arcs,
    SVG paths with arc commands, and CSV, all in mm.
 
+## Logo and icons
+
+The logo is a bent-wire profile on a calibration grid: [`resources/logo.svg`](resources/logo.svg).
+Every platform icon is generated from the same geometry by
+`python tools/make_icons.py` (needs Pillow): `icon.ico` (embedded in the Windows
+.exe), `icon.icns` (macOS bundle) and PNG sizes (window icon, Linux).
+
 ## Project layout
 
 ```
 src/core/   image processing, geometry, detection, export (no Qt)
-src/app/    Qt GUI (main window, canvas)
+src/app/    Qt GUI (main window, canvas, translations)
+resources/  logo, icons, Windows .rc, Qt .qrc, Linux .desktop
+docs/       printable calibration sheets (PDF)
+tools/      icon generator, translation checker
 tests/      self-test / batch tool, reference photos
 ```
 

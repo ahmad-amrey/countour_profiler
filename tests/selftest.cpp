@@ -449,26 +449,21 @@ static int cmdFit() {
     return failures;
 }
 
-// Printed calibration sheets: render each variant, draw a wire on it,
-// photograph it in perspective, and require the pipeline to read it back.
+// The printable calibration sheet: render it (A4 and Letter), draw a wire on
+// it, photograph it in perspective, and require the pipeline to read it back.
+// Also writes the PDFs that ship in docs/.
 static int cmdSheet(const QString& outdir) {
     QDir().mkpath(outdir);
-    struct V { const char* name; bool checker, dark; QColor wire; };
+    struct V { const char* name; QPageSize::PageSizeId page; QColor wire; };
     const V variants[] = {
-        {"sheet_grid_white", false, false, QColor(150, 75, 35)},      // copper wire
-        {"sheet_grid_dark", false, true, QColor(205, 205, 212)},      // silver wire
-        {"sheet_checkerboard", true, false, QColor(190, 100, 40)},    // copper wire
+        {"calibration_sheet_10mm_A4", QPageSize::A4, QColor(205, 205, 212)},      // silver wire
+        {"calibration_sheet_10mm_Letter", QPageSize::Letter, QColor(150, 75, 35)}, // copper wire
     };
     const double kPx = 8.0;  // sheet pixels per mm
     int failures = 0;
     for (const V& v : variants) {
-        SheetOptions o;
-        o.checkerboard = v.checker;
-        o.dark = v.dark;
-        o.squareMM = 10;
-        writeSheetPdf(outdir + "/" + v.name + ".pdf", o);
-        QImage sheet = renderSheet(o, kPx);
-        // Wire (truth in sheet mm), drawn round-capped 0.7 mm thick.
+        writeSheetPdf(outdir + "/" + v.name + ".pdf", v.page);
+        QImage sheet = renderSheet(v.page, kPx);
         std::vector<Pt> truth;
         for (int i = 0; i <= 300; ++i) {
             const double t = i / 300.0;
@@ -483,8 +478,6 @@ static int cmdSheet(const QString& outdir) {
             for (const Pt& q : truth) poly << QPointF(q.x, q.y);
             p.drawPolyline(poly);
         }
-        sheet.save(outdir + "/" + v.name + "_flat.png");
-        // Perspective photo of the sheet lying on a table.
         const ImageU8 sheetU8 = fromQImage(sheet);
         const double W = sheet.width(), H = sheet.height();
         Mat3 Hs2p;
@@ -496,12 +489,11 @@ static int cmdSheet(const QString& outdir) {
         warpPerspective(sheetU8, Hp2s, RectD{0, 0, 2000, 1500}, 1.0, photo);
         for (auto& b : photo.d) b = uint8_t(std::min(255, b + 18));  // table instead of black
         std::printf("[%s]\n", v.name);
-        const RunOut r = runPipeline(photo, v.checker ? PatternType::Checkerboard : PatternType::LineGrid, 10);
+        const RunOut r = runPipeline(photo, PatternType::LineGrid, kSheetSquareMM);
         writeOutputs(outdir + "/" + v.name, photo, r);
         if (!r.ok) { ++failures; std::printf("  FAIL: no profile\n"); continue; }
-        std::vector<Pt> truthMM = truth;
-        const double lenT = polylineLength(truthMM, false) + 0.7, lenE = polylineLength(r.prof.pts, false);
-        const double rms = alignedRms(truthMM, r.prof.pts);
+        const double lenT = polylineLength(truth, false) + 0.7, lenE = polylineLength(r.prof.pts, false);
+        const double rms = alignedRms(truth, r.prof.pts);
         const bool ok = std::fabs(lenE - lenT) / lenT < 0.03 && rms < 0.15;
         std::printf("  length %.2f vs %.2f mm, shape RMS %.3f mm  %s\n", lenE, lenT, rms, ok ? "PASS" : "FAIL");
         if (!ok) ++failures;
