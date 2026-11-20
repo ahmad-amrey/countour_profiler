@@ -216,9 +216,11 @@ macdeployqt build/ContourProfiler.app    # optional: self-contained bundle
 ## إصدار نسخة جديدة
 
 1. حدّد رقم الإصدار الجديد في `CMakeLists.txt`
-   (`project(ContourProfiler VERSION x.y.z ...)`) واحفظ التغيير (commit). يقرأ
-   البرنامج وتفاصيل ملف Windows والإصدار الرقم من هناك.
-2. ضع على الـcommit وسمًا (tag) بالرقم نفسه وادفعه:
+   (`project(ContourProfiler VERSION x.y.z ...)`). يقرأ البرنامج وتفاصيل ملف
+   Windows والإصدار الرقم من هناك.
+2. أضف قسمًا له في أعلى [`CHANGELOG.md`](CHANGELOG.md)
+   (`## [x.y.z] - date` ثم ما الذي تغيّر)، فيصبح ملاحظات الإصدار.
+3. احفظ التغيير (commit)، ثم ضع عليه وسمًا (tag) بالرقم نفسه وادفعه:
 
 <div dir="ltr">
 
@@ -229,7 +231,8 @@ git push origin v0.1.0
 
 </div>
 
-يتحقق مسار العمل `release` من تطابق الوسم مع رقم الإصدار، ثم يبني البرنامج
+يتحقق مسار العمل `release` من تطابق الوسم مع رقم الإصدار ومن وجود قسم له في
+سجل التغييرات، ثم يبني البرنامج
 ويختبره على المنصات الثلاث، ويحزّم ملف zip لنظام Windows وصورة قرص لنظام macOS
 وملف AppImage لنظام Linux، وينشرها كإصدار على GitHub. ولتجربة التحزيم دون نشر
 إصدار، شغّل مسار العمل يدويًا من تبويب Actions، فتظهر الحزم كملفات مرفقة بالتشغيل.
@@ -324,7 +327,7 @@ src/core/   image processing, geometry, detection, export (no Qt)
 src/app/    Qt GUI (main window, canvas, translations)
 resources/  logo, icons, Windows .rc, Qt .qrc, Linux .desktop
 docs/       printable calibration sheets (PDF)
-tools/      icon generator, translation checker
+tools/      icon generator, translation checker, changelog extractor
 tests/      self-test / batch tool, reference photos
 ```
 

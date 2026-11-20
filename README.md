@@ -198,17 +198,19 @@ CMake options: `-DCP_BUILD_GUI=OFF` builds only the core and the tests;
 
 ## Making a release
 
-1. Set the new version in `CMakeLists.txt` (`project(ContourProfiler VERSION x.y.z ...)`)
-   and commit. The app, the Windows file details and the release all read it
-   from there.
-2. Tag the commit with the same version and push the tag:
+1. Set the new version in `CMakeLists.txt` (`project(ContourProfiler VERSION x.y.z ...)`).
+   The app, the Windows file details and the release all read it from there.
+2. Add a section for it at the top of [`CHANGELOG.md`](CHANGELOG.md)
+   (`## [x.y.z] - date`, then what changed). It becomes the release notes.
+3. Commit, then tag the commit with the same version and push the tag:
 
    ```bash
    git tag v0.1.0
    git push origin v0.1.0
    ```
 
-The `release` workflow checks that the tag matches the version, builds and
+The `release` workflow checks that the tag matches the version and that the
+changelog has an entry for it, builds and
 tests on all three platforms, packages a Windows zip, a macOS disk image and a
 Linux AppImage, and publishes them as a GitHub Release. To try the packaging
 without releasing, run the workflow manually from the Actions tab; the packages
@@ -295,7 +297,7 @@ src/core/   image processing, geometry, detection, export (no Qt)
 src/app/    Qt GUI (main window, canvas, translations)
 resources/  logo, icons, Windows .rc, Qt .qrc, Linux .desktop
 docs/       printable calibration sheets (PDF)
-tools/      icon generator, translation checker
+tools/      icon generator, translation checker, changelog extractor
 tests/      self-test / batch tool, reference photos
 ```
 

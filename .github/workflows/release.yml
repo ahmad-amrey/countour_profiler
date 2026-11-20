@@ -29,6 +29,14 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match project(VERSION $version) in CMakeLists.txt"
             exit 1
           fi
+          # The release notes come from CHANGELOG.md: require an entry.
+          if ! sh tools/changelog_section.sh "$version" > /dev/null; then
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::CHANGELOG.md has no section for $version. Add '## [$version] - date' with the release notes."
+              exit 1
+            fi
+            echo "::warning::CHANGELOG.md has no section for $version yet."
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   windows:
@@ -153,7 +161,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cat > notes.md <<'EOF'
+          # Release notes: this version's CHANGELOG.md section, then the
+          # download instructions; GitHub appends its generated list of
+          # merged pull requests and the full-changelog link.
+          sh tools/changelog_section.sh "${{ needs.version.outputs.version }}" > notes.md
+          printf '\n---\n\n' >> notes.md
+          cat >> notes.md <<'EOF'
           ## Downloads
 
           | Platform | File | How to start |
