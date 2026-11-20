@@ -1,5 +1,7 @@
 <p align="center"><img src="resources/icon_128.png" width="96" alt="Contour Profiler logo"></p>
 
+<p align="center"><b>English</b> · <a href="README.ar.md">العربية</a></p>
+
 # Contour Profiler
 
 Capture real-world 2D profiles (mouldings, pipes, curved edges, tool shapes...)
