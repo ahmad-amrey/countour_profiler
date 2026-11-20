@@ -51,18 +51,13 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          # Same list as the build check (proven); extras are optional below.
+          # Same list as the build check. All Arabic texts, including Qt's
+          # standard buttons, are built into the app (src/app/i18n_ar.inc).
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-ninja
             mingw-w64-x86_64-qt6-base
-      - name: Qt translations (optional)
-        run: |
-          # Only translates Qt's standard buttons; the app's own Arabic texts
-          # are built in, so a failure here must not stop the release.
-          pacman -S --noconfirm --needed mingw-w64-x86_64-qt6-translations \
-            || echo "::warning::Qt translations not installed; Qt's standard buttons stay in English."
       - name: Build and test
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -71,7 +66,7 @@ jobs:
       - name: Package
         run: |
           name="ContourProfiler-${{ needs.version.outputs.version }}-windows-x64"
-          mkdir -p "$name/translations"
+          mkdir -p "$name"
           cp build/ContourProfiler.exe "$name/"
           windeployqt6 --release --no-translations "$name/ContourProfiler.exe"
           # windeployqt copies Qt itself; also bring every other MinGW DLL that
@@ -80,7 +75,6 @@ jobs:
             find "$name" -name '*.exe' -o -name '*.dll' | xargs ldd 2>/dev/null \
               | awk '/\/mingw64\// {print $3}' | sort -u | xargs -r -I{} cp -n {} "$name/"
           done
-          cp /mingw64/share/qt6/translations/qtbase_ar.qm "$name/translations/" || true
           cp LICENSE README.md "$name/"
           # 7-Zip is preinstalled on GitHub's Windows machines.
           "/c/Program Files/7-Zip/7z.exe" a -tzip -mx=9 "$name.zip" "$name" > /dev/null
@@ -105,8 +99,6 @@ jobs:
         run: |
           name="ContourProfiler-${{ needs.version.outputs.version }}-macos-$(uname -m)"
           app="build/ContourProfiler.app"
-          mkdir -p "$app/Contents/MacOS/translations"
-          cp "$(brew --prefix qt)/share/qt/translations/qtbase_ar.qm" "$app/Contents/MacOS/translations/" || true
           "$(brew --prefix qt)/bin/macdeployqt" "$app"
           # Ad-hoc signature (required to run on Apple Silicon); not notarised.
           codesign --force --deep --sign - "$app"

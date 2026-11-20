@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 # The single source of the version number: the app, the Windows file details
 # and the release workflow (which checks the git tag) all read it from here.
-project(ContourProfiler VERSION 0.1.0 LANGUAGES CXX)
+project(ContourProfiler VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

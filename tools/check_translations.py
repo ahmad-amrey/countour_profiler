@@ -19,7 +19,10 @@ for f in sorted(glob.glob(os.path.join(root, 'src', 'app', '*.cpp'))):
 inc = open(os.path.join(root, 'src', 'app', 'i18n_ar.inc'), encoding='utf-8').read()
 keys = set(m.group(1) for m in re.finditer(r'\{' + lit + r'\s*,', inc))
 missing = [s for s in used if s not in keys]
-unused = [k for k in keys if k not in used]
+# Entries after the QT-STRINGS marker are Qt's own texts, not tr() in our code.
+own = inc.split("// QT-STRINGS")[0]
+own_keys = set(m.group(1) for m in re.finditer(r'\{' + lit + r'\s*,', own))
+unused = [k for k in own_keys if k not in used]
 sys.stdout.reconfigure(encoding='utf-8')
 print('tr strings:', len(used), 'translated:', len(used) - len(missing))
 for s in missing:

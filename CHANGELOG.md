@@ -4,6 +4,22 @@ What changed in each release. The section for a version is published as that
 version's release notes, so write it before tagging (see *Making a release* in
 the README).
 
+## [0.1.1] - 2026-11-20
+
+Fix release for the Arabic interface.
+
+### Fixed
+
+- **Arabic interface:** Qt's standard texts are now in Arabic on Windows, macOS
+  and Linux: dialog buttons (OK, Cancel, Yes, No, Save…), the right-click menu
+  of text fields (Copy, Paste, Select All…) and the colour picker. In 0.1.0
+  they stayed in English.
+
+### Changed
+
+- The release packages no longer depend on Qt's separate translation files;
+  all Arabic texts are built into the app.
+
 ## [0.1.0] - 2026-11-20
 
 First public release. Contour Profiler copies the cross-section of a real
